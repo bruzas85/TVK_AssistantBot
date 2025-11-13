@@ -1,0 +1,46 @@
+{
+  "chat_id": 1320620131,
+  "state": "main_menu",
+  "expenses": [
+    {
+      "date": "2025-11-13T21:22:55.528494",
+      "category": "Оборудование",
+      "amount": 3000.0,
+      "description": "винтовой домкрат",
+      "type": "work"
+    },
+    {
+      "date": "2025-11-13T21:23:06.055292",
+      "category": "Здоровье",
+      "amount": 350.0,
+      "description": "таблетки",
+      "type": "work"
+    },
+    {
+      "date": "2025-11-13T21:23:20.144217",
+      "category": "Проезд",
+      "amount": 468.0,
+      "description": "автобус",
+      "type": "work"
+    }
+  ],
+  "timesheet": {
+    "employees": [
+      {
+        "id": "1763058153.268334",
+        "name": "Мурзагалиев Василий",
+        "daily_salary": 3500.0,
+        "created_date": "2025-11-13T21:22:33.268334"
+      }
+    ],
+    "attendance_records": [
+      {
+        "employee_id": "1763058153.268334",
+        "work_date": "2025-11-13",
+        "is_present": true,
+        "is_locked": true
+      }
+    ]
+  },
+  "last_updated": "2025-11-14T00:13:41.521446"
+}
