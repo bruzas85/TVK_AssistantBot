@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from .timesheet import Timesheet
+from .construction import ConstructionManager
 
 
 class Expense:
@@ -28,6 +29,7 @@ class UserData:
         self.expenses: List[Expense] = []
         self.state: str = 'main_menu'
         self.timesheet = Timesheet(chat_id)
+        self.construction_manager = ConstructionManager(chat_id)
 
     def add_expense(self, expense: Expense):
         self.expenses.append(expense)

@@ -3,44 +3,65 @@
   "state": "main_menu",
   "expenses": [
     {
-      "date": "2025-11-13T21:22:55.528494",
-      "category": "Оборудование",
+      "date": "2025-11-14T03:05:37.605682",
+      "category": "Образование",
       "amount": 3000.0,
-      "description": "винтовой домкрат",
-      "type": "work"
+      "description": "обучений",
+      "type": "personal"
     },
     {
-      "date": "2025-11-13T21:23:06.055292",
-      "category": "Здоровье",
-      "amount": 350.0,
-      "description": "таблетки",
-      "type": "work"
-    },
-    {
-      "date": "2025-11-13T21:23:20.144217",
+      "date": "2025-11-14T03:05:51.578381",
       "category": "Проезд",
-      "amount": 468.0,
+      "amount": 5400.0,
       "description": "автобус",
-      "type": "work"
+      "type": "personal"
     }
   ],
   "timesheet": {
     "employees": [
       {
-        "id": "1763058153.268334",
-        "name": "Мурзагалиев Василий",
+        "id": "1763078698.698767",
+        "name": "Василий",
         "daily_salary": 3500.0,
-        "created_date": "2025-11-13T21:22:33.268334"
+        "created_date": "2025-11-14T03:04:58.698767"
       }
     ],
     "attendance_records": [
       {
-        "employee_id": "1763058153.268334",
-        "work_date": "2025-11-13",
+        "employee_id": "1763078698.698767",
+        "work_date": "2025-11-14",
         "is_present": true,
         "is_locked": true
       }
     ]
   },
-  "last_updated": "2025-11-14T00:13:41.521446"
+  "construction_manager": {
+    "objects": [
+      {
+        "id": "1763078468.604826",
+        "name": "Фестивальная 13",
+        "address": "Ул. Фестивальная, вл.13, 13А",
+        "created_date": "2025-11-14T03:01:08.604826",
+        "current_stage": "INSTALLATION",
+        "responsible_persons": [
+          {
+            "name": "Дидик Василий",
+            "position": "начальник участка",
+            "phone": "89022342323",
+            "email": ""
+          }
+        ],
+        "comments": {
+          "ACCEPTANCE": [
+            "14.11.2025 03:03: Отверстия не соостны"
+          ],
+          "INSTALLATION": [],
+          "COMPLETION": []
+        },
+        "is_completed": false,
+        "completion_date": null
+      }
+    ]
+  },
+  "last_updated": "2025-11-14T03:06:16.061619"
 }

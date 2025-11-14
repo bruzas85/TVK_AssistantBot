@@ -28,6 +28,7 @@ class JSONStorageService:
                         'type': exp.type
                     } for exp in user_data.expenses
                 ],
+                # В разделе timesheet замените responsible_persons на:
                 'timesheet': {
                     'employees': [
                         {
@@ -44,6 +45,31 @@ class JSONStorageService:
                             'is_present': rec.is_present,
                             'is_locked': rec.is_locked
                         } for rec in user_data.timesheet.attendance_records
+                    ]
+                },
+                # Добавьте construction_manager данные:
+                'construction_manager': {
+                    'objects': [
+                        {
+                            'id': obj.id,
+                            'name': obj.name,
+                            'address': obj.address,
+                            'created_date': obj.created_date.isoformat(),
+                            'current_stage': obj.current_stage.name,
+                            'responsible_persons': [  # УПРОЩЕННАЯ СТРУКТУРА
+                                {
+                                    'name': person.name,
+                                    'position': person.position,
+                                    'phone': person.phone,
+                                    'email': person.email
+                                } for person in obj.responsible_persons
+                            ],
+                            'comments': {
+                                stage.name: comments for stage, comments in obj.comments.items()
+                            },
+                            'is_completed': obj.is_completed,
+                            'completion_date': obj.completion_date.isoformat() if obj.completion_date else None
+                        } for obj in user_data.construction_manager.objects.values()
                     ]
                 },
                 'last_updated': datetime.now().isoformat()

@@ -7,6 +7,7 @@ from .models.user_data import UserData
 from .handlers.expenses_handler import ExpensesHandler
 from .handlers.report_handler import ReportHandler
 from .handlers.timesheet_handler import TimesheetHandler
+from .handlers.construction_handler import ConstructionHandler
 from .services.storage_service import JSONStorageService
 
 
@@ -23,6 +24,7 @@ class FinanceBot:
         self.expenses_handler = ExpensesHandler(self.bot, self.users_data)
         self.report_handler = ReportHandler(self.bot, self.users_data)
         self.timesheet_handler = TimesheetHandler(self.bot, self.users_data)
+        self.construction_handler = ConstructionHandler(self.bot, self.users_data)
 
         self._register_handlers()
 
@@ -62,7 +64,7 @@ class FinanceBot:
 
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         buttons = [
-            'расходы', 'табель', 'СП мусоропровод',
+            'расходы', 'табель', '🏗 Стройобъекты', 'СП мусоропровод',
             'расчёт расходов', 'очистить данные'
         ]
         for button in buttons:
@@ -100,6 +102,31 @@ class FinanceBot:
 
         print(f"Получено сообщение: '{text}' от пользователя {chat_id}, состояние: {user_data.state}")
 
+        # Обработка состояний строительных объектов
+        if user_data.state == 'waiting_object_name':
+            self.construction_handler.handle_object_name_input(message)
+            return
+
+        if user_data.state == 'waiting_object_address':
+            self.construction_handler.handle_object_address_input(message)
+            return
+
+        if user_data.state == 'waiting_resp_name':
+            self.construction_handler.handle_resp_name_input(message)
+            return
+
+        if user_data.state == 'waiting_resp_position':
+            self.construction_handler.handle_resp_position_input(message)
+            return
+
+        if user_data.state == 'waiting_resp_phone':
+            self.construction_handler.handle_resp_phone_input(message)
+            return
+
+        # ДОБАВЛЯЕМ обработку состояния комментариев
+        if user_data.state == 'waiting_comment':
+            self.construction_handler.handle_comment_input(message)
+            return
         # Обработка состояний табеля
         if user_data.state == 'waiting_employee_name':
             self.timesheet_handler.handle_employee_name_input(message)
@@ -157,6 +184,14 @@ class FinanceBot:
             self.timesheet_handler.handle_manage_attendance(message)
         elif text == '💰 Расчет зарплаты':
             self.timesheet_handler.handle_calculate_salary(message)
+        elif text == '🏗 Стройобъекты':
+            self.construction_handler.handle_construction_main(message)
+        elif text == '🏗 Добавить объект':
+            self.construction_handler.handle_add_object(message)
+        elif text == '📋 Список объектов':
+            self.construction_handler.handle_view_objects(message)
+        elif text == '⚙️ Управление объектом':
+            self.construction_handler.handle_manage_object_menu(message)
         elif text == 'назад':
             self._handle_start(message)
         else:
@@ -167,12 +202,20 @@ class FinanceBot:
         chat_id = call.message.chat.id
         user_data = self._get_user_data(chat_id)
 
+        # Обработка callback для табеля
         if call.data.startswith(("toggle_attendance:", "save_attendance")):
             self.timesheet_handler.handle_attendance_callback(call)
         elif call.data.startswith("remove_employee:"):
             self.timesheet_handler.handle_remove_employee_callback(call)
         elif call.data == "back_to_timesheet":
             self.timesheet_handler.handle_timesheet_main(call.message)
+
+        # Обработка callback для строительных объектов
+        elif call.data.startswith(("select_object:", "obj_responsible:", "obj_comments:", "view_comments:",
+                                   "add_comment:", "obj_next_stage:", "obj_complete:", "confirm_complete:",
+                                   "resp_stage:", "add_resp:", "remove_resp:", "back_to_object:",
+                                   "back_to_construction", "back_to_objects")):
+            self.construction_handler.handle_construction_callback(call)
 
     def _handle_clear_confirmation(self, message):
         chat_id = message.chat.id
