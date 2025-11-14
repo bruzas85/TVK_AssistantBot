@@ -102,6 +102,18 @@ class FinanceBot:
 
         print(f"Получено сообщение: '{text}' от пользователя {chat_id}, состояние: {user_data.state}")
 
+        # Обработка команды /del для удаления ответственных лиц
+        if text.startswith('/del'):
+            # Проверяем, находится ли пользователь в режиме управления объектом
+            if (hasattr(user_data, 'temp_object_id') and
+                    user_data.state == 'construction_main'):
+                object_id = getattr(user_data, 'temp_object_id')
+                self.construction_handler.handle_delete_responsible(message, object_id)
+                return
+            else:
+                self.bot.send_message(chat_id, "❌ Сначала выберите объект в разделе 'Управление объектом'")
+                return
+
         # Обработка состояний строительных объектов
         if user_data.state == 'waiting_object_name':
             self.construction_handler.handle_object_name_input(message)
@@ -122,6 +134,12 @@ class FinanceBot:
         if user_data.state == 'waiting_resp_phone':
             self.construction_handler.handle_resp_phone_input(message)
             return
+
+        if user_data.state == 'waiting_comment':
+            self.construction_handler.handle_comment_input(message)
+            return
+
+        # ... остальной код без изменений ...
 
         # ДОБАВЛЯЕМ обработку состояния комментариев
         if user_data.state == 'waiting_comment':

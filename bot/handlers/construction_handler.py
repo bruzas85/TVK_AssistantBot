@@ -8,6 +8,16 @@ class ConstructionHandler(BaseHandler):
         super().__init__(bot, users_data)
 
     def handle_construction_main(self, message):
+        chat_id = message.chat.id
+        user_data = self.get_user_data(chat_id)
+
+        # Очищаем временные данные
+        if hasattr(user_data, 'temp_object_id'):
+            delattr(user_data, 'temp_object_id')
+
+        self.set_user_state(chat_id, 'construction_main')
+
+        # ... остальной код метода без изменений ...
         self.set_user_state(message.chat.id, 'construction_main')
 
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -154,6 +164,9 @@ class ConstructionHandler(BaseHandler):
             self.handle_construction_main(call.message)
             return
 
+        # Сохраняем object_id для команды /del
+        user_data.temp_object_id = object_id
+
         markup = types.InlineKeyboardMarkup(row_width=2)
 
         # Кнопки управления
@@ -172,16 +185,16 @@ class ConstructionHandler(BaseHandler):
         comments_count = sum(len(comments) for comments in obj.comments.values())
 
         response = f"""
-🏗️ УПРАВЛЕНИЕ ОБЪЕКТОМ
+    🏗️ УПРАВЛЕНИЕ ОБЪЕКТОМ
 
-Название: {obj.name}
-Адрес: {obj.address}
-Текущий этап: {obj.current_stage.value}
-Ответственные лица: {responsible_count} чел.
-Комментарии: {comments_count} шт.
+    Название: {obj.name}
+    Адрес: {obj.address}
+    Текущий этап: {obj.current_stage.value}
+    Ответственные лица: {responsible_count} чел.
+    Комментарии: {comments_count} шт.
 
-Выберите действие:
-"""
+    Выберите действие:
+    """
         self.bot.edit_message_text(
             response,
             chat_id=chat_id,
@@ -197,27 +210,112 @@ class ConstructionHandler(BaseHandler):
         if not obj:
             return
 
-        markup = types.InlineKeyboardMarkup()
-
-        # Показываем текущих ответственных
+        # Формируем текстовый список ответственных лиц
         if obj.responsible_persons:
-            for i, person in enumerate(obj.responsible_persons):
-                button_text = f"❌ {person.name} - {person.position} ({person.phone})"
-                callback_data = f"remove_resp:{object_id}:{i}"
-                markup.add(types.InlineKeyboardButton(button_text, callback_data=callback_data))
-        else:
-            markup.add(types.InlineKeyboardButton("❌ Нет ответственных лиц", callback_data="none"))
+            response = f"👥 ОТВЕТСТВЕННЫЕ ЛИЦА\n\nОбъект: {obj.name}\n\n"
 
+            for i, person in enumerate(obj.responsible_persons, 1):
+                response += f"{i}. {person.position}, {person.name}, {person.phone}"
+                if person.email:
+                    response += f", {person.email}"
+                response += "\n"
+
+            response += f"\n🗑️ Для удаления контакта введите команду:\n"
+            response += f"/del <ФИО> или /del <номер телефона>\n"
+            response += f"Например: /del {obj.responsible_persons[0].name}\n"
+            response += f"Или: /del {obj.responsible_persons[0].phone}"
+
+        else:
+            response = f"👥 ОТВЕТСТВЕННЫЕ ЛИЦА\n\nОбъект: {obj.name}\n\n"
+            response += "❌ Нет ответственных лиц\n\n"
+            response += "Для добавления нажмите кнопку ниже"
+
+        markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("➕ Добавить ответственное лицо", callback_data=f"add_resp:{object_id}"))
         markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"back_to_object:{object_id}"))
 
-        response = f"👥 ОТВЕТСТВЕННЫЕ ЛИЦА\n\nОбъект: {obj.name}\n\nТекущие ответственные лица:"
         self.bot.edit_message_text(
             response,
             chat_id=chat_id,
             message_id=call.message.message_id,
             reply_markup=markup
         )
+
+    def handle_delete_responsible(self, message, object_id: str):
+        """Обрабатывает команду /del для удаления ответственного лица"""
+        chat_id = message.chat.id
+        user_data = self.get_user_data(chat_id)
+        obj = user_data.construction_manager.get_object(object_id)
+
+        if not obj:
+            self.bot.send_message(chat_id, "❌ Объект не найден.")
+            return
+
+        # Извлекаем аргумент команды (ФИО или телефон)
+        command_parts = message.text.split(' ', 1)
+        if len(command_parts) < 2:
+            self.bot.send_message(chat_id, "❌ Используйте: /del <ФИО> или /del <номер телефона>")
+            return
+
+        search_term = command_parts[1].strip()
+
+        # Ищем ответственное лицо по ФИО или телефону
+        removed = False
+        removed_person = None
+
+        for i, person in enumerate(obj.responsible_persons[:]):  # Используем копию списка для безопасного удаления
+            if (search_term.lower() in person.name.lower() or
+                    search_term in person.phone):
+                removed_person = obj.responsible_persons.pop(i)
+                removed = True
+                break
+
+        if removed and removed_person:
+            self.bot.send_message(
+                chat_id,
+                f"✅ Ответственное лицо удалено:\n"
+                f"{removed_person.position}, {removed_person.name}, {removed_person.phone}"
+            )
+            # Показываем обновленный список
+            self._show_responsible_persons(chat_id, object_id)
+        else:
+            self.bot.send_message(
+                chat_id,
+                f"❌ Ответственное лицо не найдено по запросу: '{search_term}'\n"
+                f"Проверьте правильность ФИО или номера телефона"
+            )
+
+    def _show_responsible_persons(self, chat_id: int, object_id: str):
+        """Показывает список ответственных лиц (вспомогательный метод)"""
+        user_data = self.get_user_data(chat_id)
+        obj = user_data.construction_manager.get_object(object_id)
+
+        if not obj:
+            return
+
+        # Формируем текстовый список
+        if obj.responsible_persons:
+            response = f"👥 ОТВЕТСТВЕННЫЕ ЛИЦА\n\nОбъект: {obj.name}\n\n"
+
+            for i, person in enumerate(obj.responsible_persons, 1):
+                response += f"{i}. {person.position}, {person.name}, {person.phone}"
+                if person.email:
+                    response += f", {person.email}"
+                response += "\n"
+
+            response += f"\n🗑️ Для удаления контакта введите команду:\n"
+            response += f"/del <ФИО> или /del <номер телефона>"
+
+        else:
+            response = f"👥 ОТВЕТСТВЕННЫЕ ЛИЦА\n\nОбъект: {obj.name}\n\n"
+            response += "❌ Нет ответственных лиц\n\n"
+            response += "Для добавления нажмите кнопку ниже"
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("➕ Добавить ответственное лицо", callback_data=f"add_resp:{object_id}"))
+        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"back_to_object:{object_id}"))
+
+        self.bot.send_message(chat_id, response, reply_markup=markup)
 
     def start_add_responsible_person(self, call, object_id: str):
         chat_id = call.message.chat.id
