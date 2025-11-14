@@ -1,35 +1,28 @@
 import os
 import threading
-
-try:
-    from flask import Flask
-except ImportError:
-    print("⚠️ Flask не установлен, запускаем без web-сервера")
-    Flask = None
-
+from flask import Flask
 from bot.bot import FinanceBot
 
 # Получаем токен из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
+# Простой HTTP сервер для здоровья приложения
+app = Flask(__name__)
+
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+
+@app.route('/health')
+def health():
+    return "OK"
+
 
 def run_flask():
-    """Запускает Flask сервер если установлен"""
-    if Flask is not None:
-        app = Flask(__name__)
-
-        @app.route('/')
-        def home():
-            return "Bot is running!"
-
-        @app.route('/health')
-        def health():
-            return "OK"
-
-        port = int(os.getenv('PORT', 5000))
-        app.run(host='0.0.0.0', port=port)
-    else:
-        print("ℹ️ Flask не установлен, web-сервер не запущен")
+    port = int(os.getenv('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
 
 
 if __name__ == '__main__':
@@ -40,14 +33,10 @@ if __name__ == '__main__':
 
     print(f"✅ BOT_TOKEN получен, запуск бота...")
 
-    # Запускаем Flask в отдельном потоке если он установлен
-    if Flask is not None:
-        flask_thread = threading.Thread(target=run_flask)
-        flask_thread.daemon = True
-        flask_thread.start()
-        print("✅ Web-сервер запущен")
-    else:
-        print("ℹ️ Web-сервер не запущен (Flask не установлен)")
+    # Запускаем Flask в отдельном потоке для Railway
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
 
     # Запускаем бота
     bot = FinanceBot(BOT_TOKEN)
