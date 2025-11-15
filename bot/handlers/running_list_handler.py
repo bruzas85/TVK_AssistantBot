@@ -75,29 +75,48 @@ class RunningListHandler(BaseHandler):
         chat_id = call.message.chat.id
         data = call.data
 
+        print(f"DEBUG: Running list callback получен: {data}")
+
         if data.startswith("priority:"):
             priority_name = data.split(":")[1]
+            print(f"DEBUG: Обработка приоритета: {priority_name}")
             self.handle_priority_selection(call, priority_name)
+        else:
+            print(f"DEBUG: Неизвестный callback: {data}")
 
     def handle_priority_selection(self, call, priority_name: str):
         chat_id = call.message.chat.id
         user_data = self.get_user_data(chat_id)
+
+        print(f"DEBUG: handle_priority_selection вызван с priority_name: {priority_name}")
+        print(f"DEBUG: temp_task_description: {getattr(user_data, 'temp_task_description', 'НЕ НАЙДЕНО')}")
 
         try:
             priority = TaskPriority[priority_name]
             description = getattr(user_data, 'temp_task_description', '')
 
             if not description:
+                print(f"DEBUG: Ошибка - описание задачи не найдено")
                 self.bot.send_message(chat_id, "❌ Ошибка: описание задачи не найдено.")
                 self.handle_running_list_main(call.message)
                 return
 
             # Добавляем задачу
             task = user_data.running_list.add_task(description, priority)
+            print(f"DEBUG: Задача добавлена: {task.description} с приоритетом {task.priority.value}")
+
+            # АВТОСОХРАНЕНИЕ после добавления задачи
+            self._auto_save_user_data(chat_id)
 
             # Очищаем временные данные
             if hasattr(user_data, 'temp_task_description'):
                 delattr(user_data, 'temp_task_description')
+
+            # Удаляем сообщение с кнопками приоритета
+            try:
+                self.bot.delete_message(chat_id, call.message.message_id)
+            except:
+                pass
 
             self.bot.send_message(
                 chat_id,
@@ -108,9 +127,18 @@ class RunningListHandler(BaseHandler):
             self.handle_running_list_main(call.message)
 
         except KeyError:
+            print(f"DEBUG: Ошибка - неверный приоритет: {priority_name}")
             self.bot.send_message(chat_id, "❌ Ошибка: неверный приоритет.")
             self.handle_running_list_main(call.message)
 
+    def _auto_save_user_data(self, chat_id: int):
+        """Автосохранение данных пользователя"""
+        try:
+            user_data = self.get_user_data(chat_id)
+            self.bot.storage_service.save_user_data(user_data)
+            print(f"DEBUG: Данные пользователя {chat_id} автосохранены")
+        except Exception as e:
+            print(f"DEBUG: Ошибка автосохранения: {e}")
     def handle_view_tasks(self, message):
         chat_id = message.chat.id
         user_data = self.get_user_data(chat_id)
@@ -171,6 +199,8 @@ class RunningListHandler(BaseHandler):
         user_data = self.get_user_data(chat_id)
         running_list = user_data.running_list
 
+        print(f"DEBUG: handle_complete_task вызван с номером: '{task_number}'")
+
         try:
             task_index = int(task_number) - 1
             active_tasks = running_list.get_active_tasks()
@@ -178,6 +208,9 @@ class RunningListHandler(BaseHandler):
             if 0 <= task_index < len(active_tasks):
                 task = active_tasks[task_index]
                 task.complete()
+
+                # АВТОСОХРАНЕНИЕ
+                self._auto_save_user_data(chat_id)
 
                 self.bot.send_message(
                     chat_id,
@@ -196,6 +229,8 @@ class RunningListHandler(BaseHandler):
         user_data = self.get_user_data(chat_id)
         running_list = user_data.running_list
 
+        print(f"DEBUG: handle_delete_task вызван с номером: '{task_number}'")
+
         try:
             task_index = int(task_number) - 1
             active_tasks = running_list.get_active_tasks()
@@ -203,6 +238,9 @@ class RunningListHandler(BaseHandler):
             if 0 <= task_index < len(active_tasks):
                 task = active_tasks[task_index]
                 running_list.delete_task(task.id)
+
+                # АВТОСОХРАНЕНИЕ
+                self._auto_save_user_data(chat_id)
 
                 self.bot.send_message(
                     chat_id,
@@ -215,7 +253,6 @@ class RunningListHandler(BaseHandler):
 
         except ValueError:
             self.bot.send_message(chat_id, "❌ Используйте: /delete <номер задачи>")
-
     def handle_reopen_task(self, message, task_number: str):
         chat_id = message.chat.id
         user_data = self.get_user_data(chat_id)

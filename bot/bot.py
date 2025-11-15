@@ -22,6 +22,9 @@ class FinanceBot:
         # Загружаем данные при запуске
         self.users_data: Dict[int, UserData] = self.storage_service.load_all_data()
 
+        # Передаем storage_service в обработчики через bot объект
+        self.bot.storage_service = self.storage_service
+
         self.expenses_handler = ExpensesHandler(self.bot, self.users_data)
         self.report_handler = ReportHandler(self.bot, self.users_data)
         self.timesheet_handler = TimesheetHandler(self.bot, self.users_data)
@@ -106,27 +109,30 @@ class FinanceBot:
 
         # Обработка команд Running List
         if text.startswith('/done'):
-            self.running_list_handler.handle_complete_task(message, text.split(' ', 1)[1] if ' ' in text else "")
+            task_number = text.split(' ', 1)[1] if ' ' in text else ""
+            print(f"DEBUG: Обработка команды /done с номером: '{task_number}'")
+            self.running_list_handler.handle_complete_task(message, task_number)
             return
 
         if text.startswith('/delete'):
-            self.running_list_handler.handle_delete_task(message, text.split(' ', 1)[1] if ' ' in text else "")
+            task_number = text.split(' ', 1)[1] if ' ' in text else ""
+            print(f"DEBUG: Обработка команды /delete с номером: '{task_number}'")
+            self.running_list_handler.handle_delete_task(message, task_number)
             return
 
         if text.startswith('/reopen'):
-            self.running_list_handler.handle_reopen_task(message, text.split(' ', 1)[1] if ' ' in text else "")
+            task_number = text.split(' ', 1)[1] if ' ' in text else ""
+            print(f"DEBUG: Обработка команды /reopen с номером: '{task_number}'")
+            self.running_list_handler.handle_reopen_task(message, task_number)
             return
         # Обработка команды /del для удаления ответственных лиц
         if text.startswith('/del'):
 
             # Обработка состояний Running List (ДОБАВЛЯЕМ В НАЧАЛО)
             if user_data.state == 'waiting_task_description':
+                print(f"DEBUG: Обнаружено состояние 'waiting_task_description', передаем в running_list_handler")
                 self.running_list_handler.handle_task_description_input(message)
                 return
-
-            if user_data.state == 'waiting_task_priority':
-                # Это состояние обрабатывается через callback
-                pass
 
             # Обработка состояний строительных объектов
             if user_data.state == 'waiting_object_name':
@@ -209,6 +215,18 @@ class FinanceBot:
             return
 
             # Обработка основных кнопок меню (ДОБАВЛЯЕМ Running List)
+        if text == '📋 Running List':
+            print(f"DEBUG: Нажата кнопка '📋 Running List'")
+            self.running_list_handler.handle_running_list_main(message)
+        elif text == '➕ Добавить задачу':
+            print(f"DEBUG: Нажата кнопка '➕ Добавить задачу'")
+            self.running_list_handler.handle_add_task(message)
+        elif text == '📋 Список задач':
+            print(f"DEBUG: Нажата кнопка '📋 Список задач'")
+            self.running_list_handler.handle_view_tasks(message)
+        elif text == '✅ Выполненные':
+            print(f"DEBUG: Нажата кнопка '✅ Выполненные'")
+            self.running_list_handler.handle_completed_tasks(message)
         if text == 'расходы':
             self.expenses_handler.handle_expenses_menu(message)
         elif text == 'табель':
@@ -239,14 +257,6 @@ class FinanceBot:
             self.construction_handler.handle_view_objects(message)
         elif text == '⚙️ Управление объектом':
             self.construction_handler.handle_manage_object_menu(message)
-        elif text == '📋 Running List':  # ДОБАВЛЯЕМ
-            self.running_list_handler.handle_running_list_main(message)
-        elif text == '➕ Добавить задачу':  # ДОБАВЛЯЕМ
-            self.running_list_handler.handle_add_task(message)
-        elif text == '📋 Список задач':  # ДОБАВЛЯЕМ
-            self.running_list_handler.handle_view_tasks(message)
-        elif text == '✅ Выполненные':  # ДОБАВЛЯЕМ
-            self.running_list_handler.handle_completed_tasks(message)
         elif text == 'назад':
             self._handle_start(message)
         else:
