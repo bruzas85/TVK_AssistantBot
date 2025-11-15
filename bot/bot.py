@@ -22,9 +22,10 @@ class FinanceBot:
         # Загружаем данные при запуске
         self.users_data: Dict[int, UserData] = self.storage_service.load_all_data()
 
-        # Передаем storage_service в обработчики через bot объект
+        # ПЕРЕДАЕМ STORAGE_SERVICE В BOT ОБЪЕКТ (важно!)
         self.bot.storage_service = self.storage_service
 
+        # Инициализируем обработчики
         self.expenses_handler = ExpensesHandler(self.bot, self.users_data)
         self.report_handler = ReportHandler(self.bot, self.users_data)
         self.timesheet_handler = TimesheetHandler(self.bot, self.users_data)
@@ -32,8 +33,6 @@ class FinanceBot:
         self.running_list_handler = RunningListHandler(self.bot, self.users_data)
 
         self._register_handlers()
-
-        # Регистрируем сохранение при завершении
         atexit.register(self._save_all_data)
 
     def _save_all_data(self):
@@ -266,6 +265,11 @@ class FinanceBot:
         """Обработка callback запросов от inline кнопок"""
         chat_id = call.message.chat.id
         user_data = self._get_user_data(chat_id)
+
+        # Обработка callback для running list (ДОБАВЬТЕ ЭТО!)
+        if call.data.startswith("priority:"):
+            self.running_list_handler.handle_running_list_callback(call)
+            return
 
         # Обработка callback для табеля
         if call.data.startswith(("toggle_attendance:", "save_attendance")):

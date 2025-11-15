@@ -253,10 +253,13 @@ class RunningListHandler(BaseHandler):
 
         except ValueError:
             self.bot.send_message(chat_id, "❌ Используйте: /delete <номер задачи>")
+
     def handle_reopen_task(self, message, task_number: str):
         chat_id = message.chat.id
         user_data = self.get_user_data(chat_id)
         running_list = user_data.running_list
+
+        print(f"DEBUG: handle_reopen_task вызван с номером: '{task_number}'")
 
         try:
             task_index = int(task_number) - 1
@@ -265,6 +268,9 @@ class RunningListHandler(BaseHandler):
             if 0 <= task_index < len(completed_tasks):
                 task = completed_tasks[task_index]
                 task.reopen()
+
+                # АВТОСОХРАНЕНИЕ
+                self._auto_save_user_data(chat_id)
 
                 self.bot.send_message(
                     chat_id,
