@@ -1,6 +1,6 @@
 from telebot import types
 from .base_handler import BaseHandler
-from ..models.running_list import RunningTask, TaskPriority
+from ..models.running_list import RunningTask, TaskPriority, TaskStatus
 
 
 class RunningListHandler(BaseHandler):
@@ -12,27 +12,25 @@ class RunningListHandler(BaseHandler):
 
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         btn_add_task = types.KeyboardButton('➕ Добавить задачу')
-        btn_view_tasks = types.KeyboardButton('📋 Список задач')
-        btn_completed_tasks = types.KeyboardButton('✅ Выполненные')
+        btn_view_grid = types.KeyboardButton('📋 Grid задач')
+        btn_view_by_status = types.KeyboardButton('📊 По статусам')
         btn_back = types.KeyboardButton('назад')
-        markup.add(btn_add_task, btn_view_tasks, btn_completed_tasks, btn_back)
+        markup.add(btn_add_task, btn_view_grid, btn_view_by_status, btn_back)
 
         user_data = self.get_user_data(message.chat.id)
-        active_count = len(user_data.running_list.get_active_tasks())
-        completed_count = len(user_data.running_list.get_completed_tasks())
+        task_count = len(user_data.running_list.tasks)
 
         response = f"""
 📋 Раздел: RUNNING LIST
 
-Статистика:
-• Активных задач: {active_count}
-• Выполненных задач: {completed_count}
+Всего задач: {task_count}
 
-Приоритеты:
-🔵 Низкий - не срочно
-🟡 Средний - обычная важность  
-🔴 Высокий - важно
-⚡ Срочный - очень срочно
+Статусы задач:
+⏳ Ожидает
+✅ Выполнено  
+🟡 Частично выполнено
+❌ Отменено
+📅 Перенесено
 
 Выберите действие:
 """
@@ -45,7 +43,7 @@ class RunningListHandler(BaseHandler):
         btn_back = types.KeyboardButton('назад')
         markup.add(btn_back)
 
-        response = "➕ ДОБАВЛЕНИЕ ЗАДАЧИ\n\nВведите описание задачи:"
+        response = "➕ ДОБАВЛЕНИЕ ЗАДАЧИ\n\nВведите полное описание задачи:"
         self.bot.send_message(message.chat.id, response, reply_markup=markup)
 
     def handle_task_description_input(self, message):
@@ -58,6 +56,31 @@ class RunningListHandler(BaseHandler):
 
         user_data = self.get_user_data(chat_id)
         user_data.temp_task_description = description
+        self.set_user_state(chat_id, 'waiting_task_short_name')
+
+        response = f"📝 Полное описание: {description}\n\nТеперь введите короткое название для кнопки (максимум 20 символов):"
+        self.bot.send_message(chat_id, response)
+
+    def handle_task_short_name_input(self, message):
+        chat_id = message.chat.id
+        short_name = message.text.strip()
+
+        if not short_name:
+            self.bot.send_message(chat_id, "❌ Короткое название не может быть пустым.")
+            return
+
+        if len(short_name) > 20:
+            short_name = short_name[:20] + "..."
+
+        user_data = self.get_user_data(chat_id)
+        description = getattr(user_data, 'temp_task_description', '')
+
+        if not description:
+            self.bot.send_message(chat_id, "❌ Ошибка: описание задачи не найдено.")
+            self.handle_running_list_main(message)
+            return
+
+        user_data.temp_task_short_name = short_name
         self.set_user_state(chat_id, 'waiting_task_priority')
 
         markup = types.InlineKeyboardMarkup(row_width=2)
@@ -68,49 +91,256 @@ class RunningListHandler(BaseHandler):
             types.InlineKeyboardButton("⚡ Срочный", callback_data="priority:URGENT")
         )
 
-        response = f"📝 Задача: {description}\n\nВыберите приоритет:"
+        response = f"📝 Задача: {description}\n🏷️ Короткое название: {short_name}\n\nВыберите приоритет:"
         self.bot.send_message(chat_id, response, reply_markup=markup)
+
+    def handle_view_grid(self, message):
+        chat_id = message.chat.id
+        user_data = self.get_user_data(chat_id)
+        running_list = user_data.running_list
+
+        if not running_list.tasks:
+            response = "📋 GRID ЗАДАЧ\n\n❌ Нет задач"
+            self.bot.send_message(chat_id, response)
+            return
+
+        # Создаем grid 2x2 из кнопок
+        markup = types.InlineKeyboardMarkup(row_width=2)
+
+        for task in running_list.tasks:
+            # Создаем кнопку с эмодзи статуса и коротким названием
+            button_text = f"{self._get_status_emoji(task.status)} {task.short_name}"
+            callback_data = f"view_task:{task.id}"
+            markup.add(types.InlineKeyboardButton(button_text, callback_data=callback_data))
+
+        markup.add(types.InlineKeyboardButton("➕ Добавить задачу", callback_data="add_new_task"))
+
+        response = "📋 GRID ЗАДАЧ\n\nНажмите на задачу для просмотра деталей и изменения статуса:"
+        self.bot.send_message(chat_id, response, reply_markup=markup)
+
+    def handle_view_by_status(self, message):
+        chat_id = message.chat.id
+        user_data = self.get_user_data(chat_id)
+        running_list = user_data.running_list
+
+        response = "📊 ЗАДАЧИ ПО СТАТУСАМ\n\n"
+
+        for status in TaskStatus:
+            tasks = running_list.get_tasks_by_status(status)
+            if tasks:
+                response += f"\n{status.value}:\n"
+                for task in tasks:
+                    response += f"• {task.short_name} ({task.priority.value})\n"
+
+        if not running_list.tasks:
+            response += "❌ Нет задач"
+
+        self.bot.send_message(chat_id, response)
+
+    def handle_view_task_details(self, call, task_id: str):
+        chat_id = call.message.chat.id
+        user_data = self.get_user_data(chat_id)
+        task = user_data.running_list.get_task(task_id)
+
+        if not task:
+            self.bot.answer_callback_query(call.id, "❌ Задача не найдена")
+            return
+
+        # Формируем детальную информацию о задаче
+        response = f"""
+📋 ДЕТАЛИ ЗАДАЧИ
+
+🏷️ Короткое название: {task.short_name}
+📝 Полное описание: {task.description}
+🎯 Приоритет: {task.priority.value}
+📊 Статус: {task.status.value}
+📅 Создана: {task.created_date.strftime('%d.%m.%Y %H:%M')}
+🔄 Обновлена: {task.updated_date.strftime('%d.%m.%Y %H:%M')}
+"""
+
+        if task.comments:
+            response += f"\n💬 Комментарии:\n"
+            for comment in task.comments[-3:]:  # Показываем последние 3 комментария
+                response += f"• {comment}\n"
+
+        # Кнопки для изменения статуса
+        markup = types.InlineKeyboardMarkup(row_width=2)
+
+        status_buttons = [
+            ("✅ Выполнено", f"set_status:{task.id}:COMPLETED"),
+            ("🟡 Частично", f"set_status:{task.id}:PARTIAL"),
+            ("❌ Отменить", f"set_status:{task.id}:CANCELLED"),
+            ("📅 Перенести", f"set_status:{task.id}:POSTPONED"),
+            ("⏳ В ожидание", f"set_status:{task.id}:PENDING")
+        ]
+
+        for btn_text, callback_data in status_buttons:
+            markup.add(types.InlineKeyboardButton(btn_text, callback_data=callback_data))
+
+        markup.add(
+            types.InlineKeyboardButton("💬 Добавить комментарий", callback_data=f"add_comment:{task.id}"),
+            types.InlineKeyboardButton("🗑️ Удалить задачу", callback_data=f"delete_task:{task.id}")
+        )
+        markup.add(types.InlineKeyboardButton("⬅️ Назад к grid", callback_data="back_to_grid"))
+
+        self.bot.edit_message_text(
+            response,
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+            reply_markup=markup
+        )
+
+    def handle_change_status(self, call, task_id: str, new_status: str):
+        chat_id = call.message.chat.id
+        user_data = self.get_user_data(chat_id)
+        task = user_data.running_list.get_task(task_id)
+
+        if not task:
+            self.bot.answer_callback_query(call.id, "❌ Задача не найдена")
+            return
+
+        try:
+            status = TaskStatus[new_status]
+            old_status = task.status
+            task.change_status(status)
+
+            # АВТОСОХРАНЕНИЕ
+            self._auto_save_user_data(chat_id)
+
+            self.bot.answer_callback_query(
+                call.id,
+                f"✅ Статус изменен: {old_status.value} → {status.value}"
+            )
+
+            # Обновляем детали задачи
+            self.handle_view_task_details(call, task_id)
+
+        except KeyError:
+            self.bot.answer_callback_query(call.id, "❌ Ошибка изменения статуса")
+
+    def start_add_comment(self, call, task_id: str):
+        chat_id = call.message.chat.id
+        user_data = self.get_user_data(chat_id)
+
+        user_data.temp_task_id = task_id
+        self.set_user_state(chat_id, 'waiting_task_comment')
+
+        self.bot.send_message(chat_id, "💬 Введите комментарий к задаче:")
+
+    def handle_comment_input(self, message):
+        chat_id = message.chat.id
+        comment = message.text.strip()
+
+        if not comment:
+            self.bot.send_message(chat_id, "❌ Комментарий не может быть пустым.")
+            return
+
+        user_data = self.get_user_data(chat_id)
+        task_id = getattr(user_data, 'temp_task_id', '')
+
+        if not task_id:
+            self.bot.send_message(chat_id, "❌ Ошибка: задача не найдена.")
+            self.handle_running_list_main(message)
+            return
+
+        task = user_data.running_list.get_task(task_id)
+        if task:
+            task.add_comment(comment)
+
+            # АВТОСОХРАНЕНИЕ
+            self._auto_save_user_data(chat_id)
+
+            # Очищаем временные данные
+            if hasattr(user_data, 'temp_task_id'):
+                delattr(user_data, 'temp_task_id')
+
+            self.bot.send_message(chat_id, f"✅ Комментарий добавлен к задаче: {task.short_name}")
+            self.handle_running_list_main(message)
+        else:
+            self.bot.send_message(chat_id, "❌ Задача не найдена.")
+            self.handle_running_list_main(message)
+
+    def handle_delete_task(self, call, task_id: str):
+        chat_id = call.message.chat.id
+        user_data = self.get_user_data(chat_id)
+
+        task = user_data.running_list.get_task(task_id)
+        if task and user_data.running_list.delete_task(task_id):
+            # АВТОСОХРАНЕНИЕ
+            self._auto_save_user_data(chat_id)
+
+            self.bot.answer_callback_query(call.id, f"✅ Задача удалена: {task.short_name}")
+            self.handle_view_grid(call.message)
+        else:
+            self.bot.answer_callback_query(call.id, "❌ Ошибка удаления задачи")
+
+    def _get_status_emoji(self, status: TaskStatus) -> str:
+        """Возвращает эмодзи для статуса"""
+        emoji_map = {
+            TaskStatus.PENDING: "⏳",
+            TaskStatus.COMPLETED: "✅",
+            TaskStatus.PARTIAL: "🟡",
+            TaskStatus.CANCELLED: "❌",
+            TaskStatus.POSTPONED: "📅"
+        }
+        return emoji_map.get(status, "📝")
+
+    def _auto_save_user_data(self, chat_id: int):
+        """Автосохранение данных пользователя"""
+        try:
+            user_data = self.get_user_data(chat_id)
+            self.bot.storage_service.save_user_data(user_data)
+        except Exception as e:
+            print(f"Ошибка автосохранения: {e}")
 
     def handle_running_list_callback(self, call):
         chat_id = call.message.chat.id
         data = call.data
 
-        print(f"DEBUG: Running list callback получен: {data}")
+        print(f"DEBUG: Running list callback: {data}")
 
         if data.startswith("priority:"):
-            priority_name = data.split(":")[1]
-            print(f"DEBUG: Обработка приоритета: {priority_name}")
-            self.handle_priority_selection(call, priority_name)
-        else:
-            print(f"DEBUG: Неизвестный callback: {data}")
+            self.handle_priority_selection(call, data.split(":")[1])
+        elif data.startswith("view_task:"):
+            self.handle_view_task_details(call, data.split(":")[1])
+        elif data.startswith("set_status:"):
+            _, task_id, status = data.split(":")
+            self.handle_change_status(call, task_id, status)
+        elif data.startswith("add_comment:"):
+            self.start_add_comment(call, data.split(":")[1])
+        elif data.startswith("delete_task:"):
+            self.handle_delete_task(call, data.split(":")[1])
+        elif data == "back_to_grid":
+            self.bot.delete_message(chat_id, call.message.message_id)
+            self.handle_view_grid(call.message)
+        elif data == "add_new_task":
+            self.bot.delete_message(chat_id, call.message.message_id)
+            self.handle_add_task(call.message)
 
     def handle_priority_selection(self, call, priority_name: str):
         chat_id = call.message.chat.id
         user_data = self.get_user_data(chat_id)
 
-        print(f"DEBUG: handle_priority_selection вызван с priority_name: {priority_name}")
-        print(f"DEBUG: temp_task_description: {getattr(user_data, 'temp_task_description', 'НЕ НАЙДЕНО')}")
-
         try:
             priority = TaskPriority[priority_name]
             description = getattr(user_data, 'temp_task_description', '')
+            short_name = getattr(user_data, 'temp_task_short_name', '')
 
             if not description:
-                print(f"DEBUG: Ошибка - описание задачи не найдено")
                 self.bot.send_message(chat_id, "❌ Ошибка: описание задачи не найдено.")
                 self.handle_running_list_main(call.message)
                 return
 
             # Добавляем задачу
-            task = user_data.running_list.add_task(description, priority)
-            print(f"DEBUG: Задача добавлена: {task.description} с приоритетом {task.priority.value}")
+            task = user_data.running_list.add_task(description, priority, short_name)
 
-            # АВТОСОХРАНЕНИЕ после добавления задачи
+            # АВТОСОХРАНЕНИЕ
             self._auto_save_user_data(chat_id)
 
             # Очищаем временные данные
-            if hasattr(user_data, 'temp_task_description'):
-                delattr(user_data, 'temp_task_description')
+            for attr in ['temp_task_description', 'temp_task_short_name']:
+                if hasattr(user_data, attr):
+                    delattr(user_data, attr)
 
             # Удаляем сообщение с кнопками приоритета
             try:
@@ -121,166 +351,12 @@ class RunningListHandler(BaseHandler):
             self.bot.send_message(
                 chat_id,
                 f"✅ Задача добавлена!\n"
+                f"🏷️ {task.short_name}\n"
                 f"📝 {task.description}\n"
                 f"🎯 Приоритет: {task.priority.value}"
             )
             self.handle_running_list_main(call.message)
 
         except KeyError:
-            print(f"DEBUG: Ошибка - неверный приоритет: {priority_name}")
             self.bot.send_message(chat_id, "❌ Ошибка: неверный приоритет.")
             self.handle_running_list_main(call.message)
-
-    def _auto_save_user_data(self, chat_id: int):
-        """Автосохранение данных пользователя"""
-        try:
-            user_data = self.get_user_data(chat_id)
-            self.bot.storage_service.save_user_data(user_data)
-            print(f"DEBUG: Данные пользователя {chat_id} автосохранены")
-        except Exception as e:
-            print(f"DEBUG: Ошибка автосохранения: {e}")
-    def handle_view_tasks(self, message):
-        chat_id = message.chat.id
-        user_data = self.get_user_data(chat_id)
-        running_list = user_data.running_list
-
-        active_tasks = running_list.get_active_tasks()
-
-        if not active_tasks:
-            response = "📋 АКТИВНЫЕ ЗАДАЧИ\n\n❌ Нет активных задач"
-            self.bot.send_message(chat_id, response)
-            return
-
-        response = "📋 АКТИВНЫЕ ЗАДАЧИ\n\n"
-
-        # Группируем по приоритетам
-        for priority in TaskPriority:
-            tasks_by_priority = [t for t in active_tasks if t.priority == priority]
-            if tasks_by_priority:
-                response += f"\n{priority.value}:\n"
-                for i, task in enumerate(tasks_by_priority, 1):
-                    response += f"{i}. {task.description}\n"
-
-        response += f"\n✅ Для завершения задачи введите: /done <номер задачи>"
-        response += f"\n🗑️ Для удаления задачи введите: /delete <номер задачи>"
-
-        # Показываем нумерованный список для команд
-        response += f"\n\nНумерация для команд:"
-        for i, task in enumerate(active_tasks, 1):
-            response += f"\n{i}. {task.description}"
-
-        self.bot.send_message(chat_id, response)
-
-    def handle_completed_tasks(self, message):
-        chat_id = message.chat.id
-        user_data = self.get_user_data(chat_id)
-        running_list = user_data.running_list
-
-        completed_tasks = running_list.get_completed_tasks()
-
-        if not completed_tasks:
-            response = "✅ ВЫПОЛНЕННЫЕ ЗАДАЧИ\n\n❌ Нет выполненных задач"
-            self.bot.send_message(chat_id, response)
-            return
-
-        response = "✅ ВЫПОЛНЕННЫЕ ЗАДАЧИ\n\n"
-
-        for i, task in enumerate(completed_tasks, 1):
-            completed_date = task.completed_date.strftime('%d.%m.%Y %H:%M') if task.completed_date else "неизвестно"
-            response += f"{i}. {task.description}\n"
-            response += f"   🎯 {task.priority.value} | ✅ {completed_date}\n\n"
-
-        response += f"🔄 Для reopening задачи введите: /reopen <номер задачи>"
-
-        self.bot.send_message(chat_id, response)
-
-    def handle_complete_task(self, message, task_number: str):
-        chat_id = message.chat.id
-        user_data = self.get_user_data(chat_id)
-        running_list = user_data.running_list
-
-        print(f"DEBUG: handle_complete_task вызван с номером: '{task_number}'")
-
-        try:
-            task_index = int(task_number) - 1
-            active_tasks = running_list.get_active_tasks()
-
-            if 0 <= task_index < len(active_tasks):
-                task = active_tasks[task_index]
-                task.complete()
-
-                # АВТОСОХРАНЕНИЕ
-                self._auto_save_user_data(chat_id)
-
-                self.bot.send_message(
-                    chat_id,
-                    f"✅ Задача выполнена!\n"
-                    f"📝 {task.description}"
-                )
-                self.handle_view_tasks(message)
-            else:
-                self.bot.send_message(chat_id, "❌ Неверный номер задачи")
-
-        except ValueError:
-            self.bot.send_message(chat_id, "❌ Используйте: /done <номер задачи>")
-
-    def handle_delete_task(self, message, task_number: str):
-        chat_id = message.chat.id
-        user_data = self.get_user_data(chat_id)
-        running_list = user_data.running_list
-
-        print(f"DEBUG: handle_delete_task вызван с номером: '{task_number}'")
-
-        try:
-            task_index = int(task_number) - 1
-            active_tasks = running_list.get_active_tasks()
-
-            if 0 <= task_index < len(active_tasks):
-                task = active_tasks[task_index]
-                running_list.delete_task(task.id)
-
-                # АВТОСОХРАНЕНИЕ
-                self._auto_save_user_data(chat_id)
-
-                self.bot.send_message(
-                    chat_id,
-                    f"🗑️ Задача удалена!\n"
-                    f"📝 {task.description}"
-                )
-                self.handle_view_tasks(message)
-            else:
-                self.bot.send_message(chat_id, "❌ Неверный номер задачи")
-
-        except ValueError:
-            self.bot.send_message(chat_id, "❌ Используйте: /delete <номер задачи>")
-
-    def handle_reopen_task(self, message, task_number: str):
-        chat_id = message.chat.id
-        user_data = self.get_user_data(chat_id)
-        running_list = user_data.running_list
-
-        print(f"DEBUG: handle_reopen_task вызван с номером: '{task_number}'")
-
-        try:
-            task_index = int(task_number) - 1
-            completed_tasks = running_list.get_completed_tasks()
-
-            if 0 <= task_index < len(completed_tasks):
-                task = completed_tasks[task_index]
-                task.reopen()
-
-                # АВТОСОХРАНЕНИЕ
-                self._auto_save_user_data(chat_id)
-
-                self.bot.send_message(
-                    chat_id,
-                    f"🔄 Задача reopened!\n"
-                    f"📝 {task.description}"
-                )
-                self.handle_completed_tasks(message)
-            else:
-                self.bot.send_message(chat_id, "❌ Неверный номер задачи")
-
-        except ValueError:
-            self.bot.send_message(chat_id, "❌ Используйте: /reopen <номер задачи>")
-

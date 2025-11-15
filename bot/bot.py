@@ -106,6 +106,15 @@ class FinanceBot:
 
         print(f"Получено сообщение: '{text}' от пользователя {chat_id}, состояние: {user_data.state}")
 
+        # В _handle_text_message добавьте:
+        if user_data.state == 'waiting_task_short_name':
+            self.running_list_handler.handle_task_short_name_input(message)
+            return
+
+        if user_data.state == 'waiting_task_comment':
+            self.running_list_handler.handle_comment_input(message)
+            return
+
         # Обработка команд Running List
         if text.startswith('/done'):
             task_number = text.split(' ', 1)[1] if ' ' in text else ""
@@ -239,12 +248,10 @@ class FinanceBot:
         elif text == '➕ Добавить задачу':
             print(f"DEBUG: Нажата кнопка '➕ Добавить задачу'")
             self.running_list_handler.handle_add_task(message)
-        elif text == '📋 Список задач':
-            print(f"DEBUG: Нажата кнопка '📋 Список задач'")
-            self.running_list_handler.handle_view_tasks(message)
-        elif text == '✅ Выполненные':
-            print(f"DEBUG: Нажата кнопка '✅ Выполненные'")
-            self.running_list_handler.handle_completed_tasks(message)
+        elif text == '📋 Grid задач':
+            self.running_list_handler.handle_view_grid(message)
+        elif text == '📊 По статусам':
+            self.running_list_handler.handle_view_by_status(message)
         elif text == 'назад':
             self._handle_start(message)
         else:

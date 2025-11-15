@@ -3,6 +3,14 @@ from typing import List, Optional
 from enum import Enum
 
 
+class TaskStatus(Enum):
+    PENDING = "⏳ Ожидает"
+    COMPLETED = "✅ Выполнено"
+    PARTIAL = "🟡 Частично выполнено"
+    CANCELLED = "❌ Отменено"
+    POSTPONED = "📅 Перенесено"
+
+
 class TaskPriority(Enum):
     LOW = "🔵 Низкий"
     MEDIUM = "🟡 Средний"
@@ -11,22 +19,25 @@ class TaskPriority(Enum):
 
 
 class RunningTask:
-    def __init__(self, description: str, priority: TaskPriority = TaskPriority.MEDIUM, task_id: Optional[str] = None):
+    def __init__(self, description: str, priority: TaskPriority = TaskPriority.MEDIUM,
+                 task_id: Optional[str] = None, short_name: Optional[str] = None):
         self.id = task_id or str(datetime.now().timestamp())
+        self.short_name = short_name or description[:20] + "..." if len(description) > 20 else description
         self.description = description
         self.priority = priority
+        self.status = TaskStatus.PENDING
         self.created_date = datetime.now()
-        self.is_completed = False
-        self.completed_date: Optional[datetime] = None
+        self.updated_date = datetime.now()
+        self.comments: List[str] = []
         self.due_date: Optional[datetime] = None
 
-    def complete(self):
-        self.is_completed = True
-        self.completed_date = datetime.now()
+    def add_comment(self, comment: str):
+        self.comments.append(f"{datetime.now().strftime('%d.%m.%Y %H:%M')}: {comment}")
+        self.updated_date = datetime.now()
 
-    def reopen(self):
-        self.is_completed = False
-        self.completed_date = None
+    def change_status(self, new_status: TaskStatus):
+        self.status = new_status
+        self.updated_date = datetime.now()
 
 
 class RunningList:
@@ -34,8 +45,9 @@ class RunningList:
         self.chat_id = chat_id
         self.tasks: List[RunningTask] = []
 
-    def add_task(self, description: str, priority: TaskPriority = TaskPriority.MEDIUM) -> RunningTask:
-        task = RunningTask(description, priority)
+    def add_task(self, description: str, priority: TaskPriority = TaskPriority.MEDIUM,
+                 short_name: Optional[str] = None) -> RunningTask:
+        task = RunningTask(description, priority, short_name=short_name)
         self.tasks.append(task)
         return task
 
@@ -49,11 +61,11 @@ class RunningList:
             return True
         return False
 
-    def get_active_tasks(self) -> List[RunningTask]:
-        return [task for task in self.tasks if not task.is_completed]
+    def get_tasks_by_status(self, status: TaskStatus) -> List[RunningTask]:
+        return [task for task in self.tasks if task.status == status]
 
-    def get_completed_tasks(self) -> List[RunningTask]:
-        return [task for task in self.tasks if task.is_completed]
+    def get_active_tasks(self) -> List[RunningTask]:
+        return [task for task in self.tasks if task.status == TaskStatus.PENDING]
 
     def get_tasks_by_priority(self, priority: TaskPriority) -> List[RunningTask]:
-        return [task for task in self.tasks if task.priority == priority and not task.is_completed]
+        return [task for task in self.tasks if task.priority == priority]
