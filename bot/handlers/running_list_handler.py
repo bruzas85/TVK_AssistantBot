@@ -71,6 +71,14 @@ class RunningListHandler(BaseHandler):
         response = f"📝 Задача: {description}\n\nВыберите приоритет:"
         self.bot.send_message(chat_id, response, reply_markup=markup)
 
+    def handle_running_list_callback(self, call):
+        chat_id = call.message.chat.id
+        data = call.data
+
+        if data.startswith("priority:"):
+            priority_name = data.split(":")[1]
+            self.handle_priority_selection(call, priority_name)
+
     def handle_priority_selection(self, call, priority_name: str):
         chat_id = call.message.chat.id
         user_data = self.get_user_data(chat_id)
@@ -232,3 +240,4 @@ class RunningListHandler(BaseHandler):
 
         except ValueError:
             self.bot.send_message(chat_id, "❌ Используйте: /reopen <номер задачи>")
+

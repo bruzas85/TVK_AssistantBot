@@ -9,6 +9,7 @@ from .handlers.report_handler import ReportHandler
 from .handlers.timesheet_handler import TimesheetHandler
 from .handlers.construction_handler import ConstructionHandler
 from .services.storage_service import JSONStorageService
+from .handlers.running_list_handler import RunningListHandler
 
 
 class FinanceBot:
@@ -25,6 +26,7 @@ class FinanceBot:
         self.report_handler = ReportHandler(self.bot, self.users_data)
         self.timesheet_handler = TimesheetHandler(self.bot, self.users_data)
         self.construction_handler = ConstructionHandler(self.bot, self.users_data)
+        self.running_list_handler = RunningListHandler(self.bot, self.users_data)
 
         self._register_handlers()
 
@@ -64,7 +66,7 @@ class FinanceBot:
 
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         buttons = [
-            'расходы', 'табель', '🏗 Стройобъекты', 'СП мусоропровод',
+            'расходы', 'табель', '🏗 Стройобъекты', '📋 Running List', 'СП мусоропровод',
             'расчёт расходов', 'очистить данные'
         ]
         for button in buttons:
@@ -102,8 +104,35 @@ class FinanceBot:
 
         print(f"Получено сообщение: '{text}' от пользователя {chat_id}, состояние: {user_data.state}")
 
+        # Обработка команд Running List
+        if text.startswith('/done'):
+            self.running_list_handler.handle_complete_task(message, text.split(' ', 1)[1] if ' ' in text else "")
+            return
+
+        if text.startswith('/delete'):
+            self.running_list_handler.handle_delete_task(message, text.split(' ', 1)[1] if ' ' in text else "")
+            return
+
+        if text.startswith('/reopen'):
+            self.running_list_handler.handle_reopen_task(message, text.split(' ', 1)[1] if ' ' in text else "")
+            return
         # Обработка команды /del для удаления ответственных лиц
         if text.startswith('/del'):
+
+            # Обработка состояний Running List (ДОБАВЛЯЕМ В НАЧАЛО)
+            if user_data.state == 'waiting_task_description':
+                self.running_list_handler.handle_task_description_input(message)
+                return
+
+            if user_data.state == 'waiting_task_priority':
+                # Это состояние обрабатывается через callback
+                pass
+
+            # Обработка состояний строительных объектов
+            if user_data.state == 'waiting_object_name':
+                self.construction_handler.handle_object_name_input(message)
+                return
+
             # Проверяем, находится ли пользователь в режиме управления объектом
             if (hasattr(user_data, 'temp_object_id') and
                     user_data.state == 'construction_main'):
@@ -179,7 +208,7 @@ class FinanceBot:
             self._handle_period_selection(message)
             return
 
-        # Обработка основных кнопок меню
+            # Обработка основных кнопок меню (ДОБАВЛЯЕМ Running List)
         if text == 'расходы':
             self.expenses_handler.handle_expenses_menu(message)
         elif text == 'табель':
@@ -210,6 +239,14 @@ class FinanceBot:
             self.construction_handler.handle_view_objects(message)
         elif text == '⚙️ Управление объектом':
             self.construction_handler.handle_manage_object_menu(message)
+        elif text == '📋 Running List':  # ДОБАВЛЯЕМ
+            self.running_list_handler.handle_running_list_main(message)
+        elif text == '➕ Добавить задачу':  # ДОБАВЛЯЕМ
+            self.running_list_handler.handle_add_task(message)
+        elif text == '📋 Список задач':  # ДОБАВЛЯЕМ
+            self.running_list_handler.handle_view_tasks(message)
+        elif text == '✅ Выполненные':  # ДОБАВЛЯЕМ
+            self.running_list_handler.handle_completed_tasks(message)
         elif text == 'назад':
             self._handle_start(message)
         else:
@@ -235,6 +272,9 @@ class FinanceBot:
                                    "back_to_construction", "back_to_objects")):
             self.construction_handler.handle_construction_callback(call)
 
+        # Обработка callback для Running List (ДОБАВЛЯЕМ)
+        elif call.data.startswith("priority:"):
+            self.running_list_handler.handle_running_list_callback(call)
     def _handle_clear_confirmation(self, message):
         chat_id = message.chat.id
         text = message.text

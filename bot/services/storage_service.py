@@ -28,7 +28,6 @@ class JSONStorageService:
                         'type': exp.type
                     } for exp in user_data.expenses
                 ],
-                # В разделе timesheet замените responsible_persons на:
                 'timesheet': {
                     'employees': [
                         {
@@ -47,7 +46,6 @@ class JSONStorageService:
                         } for rec in user_data.timesheet.attendance_records
                     ]
                 },
-                # Добавьте construction_manager данные:
                 'construction_manager': {
                     'objects': [
                         {
@@ -56,7 +54,7 @@ class JSONStorageService:
                             'address': obj.address,
                             'created_date': obj.created_date.isoformat(),
                             'current_stage': obj.current_stage.name,
-                            'responsible_persons': [  # УПРОЩЕННАЯ СТРУКТУРА
+                            'responsible_persons': [
                                 {
                                     'name': person.name,
                                     'position': person.position,
@@ -72,16 +70,30 @@ class JSONStorageService:
                         } for obj in user_data.construction_manager.objects.values()
                     ]
                 },
+                # ДОБАВЛЯЕМ RUNNING LIST ДАННЫЕ
+                'running_list': {
+                    'tasks': [
+                        {
+                            'id': task.id,
+                            'description': task.description,
+                            'priority': task.priority.name,
+                            'created_date': task.created_date.isoformat(),
+                            'is_completed': task.is_completed,
+                            'completed_date': task.completed_date.isoformat() if task.completed_date else None,
+                            'due_date': task.due_date.isoformat() if task.due_date else None
+                        } for task in user_data.running_list.tasks
+                    ]
+                },
                 'last_updated': datetime.now().isoformat()
             }
 
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-            print(f"✓ Данные пользователя {user_data.chat_id} сохранены")
+            print(f"✅ Данные пользователя {user_data.chat_id} сохранены")
 
         except Exception as e:
-            print(f"✗ Ошибка сохранения данных пользователя {user_data.chat_id}: {e}")
+            print(f"❌ Ошибка сохранения данных пользователя {user_data.chat_id}: {e}")
 
     def load_user_data(self, chat_id: int):
         """Загружает данные пользователя из JSON файла"""
@@ -99,7 +111,10 @@ class JSONStorageService:
 
             # Импортируем здесь, чтобы избежать циклических импортов
             from ..models.user_data import UserData, Expense
-            from ..models.timesheet import Employee, AttendanceRecord
+            from ..models.timesheet import Employee, AttendanceRecord, Timesheet
+            from ..models.construction import ConstructionStage, ResponsiblePerson, ConstructionObject, \
+                ConstructionManager
+            from ..models.running_list import RunningTask, TaskPriority, RunningList
 
             user_data = UserData(chat_id)
             user_data.state = data.get('state', 'main_menu')
@@ -138,11 +153,69 @@ class JSONStorageService:
                 record.is_locked = rec_data['is_locked']
                 timesheet.attendance_records.append(record)
 
-            print(f"✓ Данные пользователя {chat_id} загружены")
+            # Восстанавливаем строительные объекты
+            construction_manager = user_data.construction_manager
+
+            for obj_data in data.get('construction_manager', {}).get('objects', []):
+                obj = ConstructionObject(
+                    name=obj_data['name'],
+                    address=obj_data['address'],
+                    object_id=obj_data['id']
+                )
+                obj.created_date = datetime.fromisoformat(obj_data['created_date'])
+                obj.current_stage = ConstructionStage[obj_data['current_stage']]
+                obj.is_completed = obj_data['is_completed']
+
+                if obj_data['completion_date']:
+                    obj.completion_date = datetime.fromisoformat(obj_data['completion_date'])
+
+                # Восстанавливаем ответственных лиц
+                for person_data in obj_data.get('responsible_persons', []):
+                    person = ResponsiblePerson(
+                        name=person_data['name'],
+                        position=person_data['position'],
+                        phone=person_data['phone'],
+                        email=person_data.get('email', '')
+                    )
+                    obj.responsible_persons.append(person)
+
+                # Восстанавливаем комментарии
+                for stage_name, comments in obj_data.get('comments', {}).items():
+                    stage = ConstructionStage[stage_name]
+                    obj.comments[stage] = comments
+
+                construction_manager.objects[obj.id] = obj
+
+            # ВОССТАНАВЛИВАЕМ RUNNING LIST ДАННЫЕ
+            running_list = user_data.running_list
+
+            for task_data in data.get('running_list', {}).get('tasks', []):
+                try:
+                    task = RunningTask(
+                        description=task_data['description'],
+                        priority=TaskPriority[task_data['priority']],
+                        task_id=task_data['id']
+                    )
+                    task.created_date = datetime.fromisoformat(task_data['created_date'])
+                    task.is_completed = task_data['is_completed']
+
+                    if task_data['completed_date']:
+                        task.completed_date = datetime.fromisoformat(task_data['completed_date'])
+
+                    if task_data['due_date']:
+                        task.due_date = datetime.fromisoformat(task_data['due_date'])
+
+                    running_list.tasks.append(task)
+
+                except KeyError as e:
+                    print(f"Ошибка загрузки задачи running list: {e}")
+                    continue
+
+            print(f"✅ Данные пользователя {chat_id} загружены")
             return user_data
 
         except Exception as e:
-            print(f"✗ Ошибка загрузки данных для пользователя {chat_id}: {e}")
+            print(f"❌ Ошибка загрузки данных для пользователя {chat_id}: {e}")
             from ..models.user_data import UserData
             return UserData(chat_id)
 
