@@ -106,15 +106,6 @@ class FinanceBot:
 
         print(f"Получено сообщение: '{text}' от пользователя {chat_id}, состояние: {user_data.state}")
 
-        # В _handle_text_message добавьте:
-        if user_data.state == 'waiting_task_short_name':
-            self.running_list_handler.handle_task_short_name_input(message)
-            return
-
-        if user_data.state == 'waiting_task_comment':
-            self.running_list_handler.handle_comment_input(message)
-            return
-
         # Обработка команд Running List
         if text.startswith('/done'):
             task_number = text.split(' ', 1)[1] if ' ' in text else ""
@@ -146,10 +137,20 @@ class FinanceBot:
                 self.bot.send_message(chat_id, "❌ Сначала выберите объект в разделе 'Управление объектом'")
                 return
 
-        # Обработка состояний Running List (ПЕРЕМЕЩАЕМ В НАЧАЛО, ПЕРЕД другими состояниями)
+        # Обработка состояний Running List (ПЕРВЫМИ!)
         if user_data.state == 'waiting_task_description':
             print(f"DEBUG: Обнаружено состояние 'waiting_task_description', передаем в running_list_handler")
             self.running_list_handler.handle_task_description_input(message)
+            return
+
+        if user_data.state == 'waiting_task_short_name':
+            print(f"DEBUG: Обнаружено состояние 'waiting_task_short_name', передаем в running_list_handler")
+            self.running_list_handler.handle_task_short_name_input(message)
+            return
+
+        if user_data.state == 'waiting_task_comment':
+            print(f"DEBUG: Обнаружено состояние 'waiting_task_comment', передаем в running_list_handler")
+            self.running_list_handler.handle_comment_input(message)
             return
 
         # Обработка состояний строительных объектов
@@ -249,8 +250,10 @@ class FinanceBot:
             print(f"DEBUG: Нажата кнопка '➕ Добавить задачу'")
             self.running_list_handler.handle_add_task(message)
         elif text == '📋 Grid задач':
+            print(f"DEBUG: Нажата кнопка '📋 Grid задач'")
             self.running_list_handler.handle_view_grid(message)
         elif text == '📊 По статусам':
+            print(f"DEBUG: Нажата кнопка '📊 По статусам'")
             self.running_list_handler.handle_view_by_status(message)
         elif text == 'назад':
             self._handle_start(message)
@@ -264,6 +267,10 @@ class FinanceBot:
 
         # Обработка callback для running list (ПЕРВЫМ ДЕЛОМ!)
         if call.data.startswith("priority:"):
+            self.running_list_handler.handle_running_list_callback(call)
+            return
+
+        if call.data.startswith(("view_task:", "set_status:", "add_comment:", "delete_task:", "back_to_grid", "add_new_task")):
             self.running_list_handler.handle_running_list_callback(call)
             return
 
@@ -282,9 +289,6 @@ class FinanceBot:
                                    "back_to_construction", "back_to_objects")):
             self.construction_handler.handle_construction_callback(call)
 
-        # Обработка callback для Running List (ДОБАВЛЯЕМ)
-        elif call.data.startswith("priority:"):
-            self.running_list_handler.handle_running_list_callback(call)
     def _handle_clear_confirmation(self, message):
         chat_id = message.chat.id
         text = message.text
