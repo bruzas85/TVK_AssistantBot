@@ -3,6 +3,7 @@ import threading
 from flask import Flask
 from bot.bot import FinanceBot
 
+
 # Получаем токен из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
