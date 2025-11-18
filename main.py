@@ -275,12 +275,15 @@ class RunningListHandlers:
             return None
 
         today = datetime.now().date()
+        # Ищем самый свежий статус для сегодняшнего дня
+        latest_status = None
         for status in reversed(task.status_history):
             status_date = datetime.fromisoformat(status['timestamp']).date()
             if status_date == today:
-                return status
-        return None
+                latest_status = status
+                break
 
+        return latest_status
     def format_task_display(self, task):
         """Форматирует отображение задачи с днями недели и статусом"""
         day_emojis = ""
@@ -289,12 +292,18 @@ class RunningListHandlers:
 
         for i in range(7):
             if task.days_of_week[i]:
+                # Если это сегодня и есть статус
                 if i == current_day_index and current_status:
-                    day_emojis += self.status_emojis.get(current_status['status'], "🟨")
+                    status_emoji = self.status_emojis.get(current_status['status'], "🟨")
+                    day_emojis += status_emoji
                 else:
                     day_emojis += self.priority_emojis.get(task.priority, "🟨")
             else:
-                day_emojis += "⬜"
+                # Если это сегодня и статус "перенесено", показываем ▶️ вместо ⬜
+                if i == current_day_index and current_status and current_status['status'] == 'postponed':
+                    day_emojis += "▶️"
+                else:
+                    day_emojis += "⬜"
 
         priority_emoji = self.priority_emojis.get(task.priority, "🟨")
         description_indicator = " 📝" if task.description else ""
@@ -473,6 +482,7 @@ class RunningListHandlers:
         if status_type == "postponed":
             current_day = datetime.now().weekday()  # 0=понедельник, 6=воскресенье
 
+            # В функции update_task_status, в части обработки postponed:
             if current_day < 6:  # Если не воскресенье (0-5 = понедельник-суббота)
                 next_day = current_day + 1
 
@@ -483,14 +493,15 @@ class RunningListHandlers:
                 message = (
                     f"▶️ **Задача перенесена!**\n\n"
                     f"Задача: {task.task_text}\n"
-                    f"Перенесена с {self.day_names[current_day]} на {self.day_names[next_day]}\n"
-                    f"Приоритет: {self.priority_emojis.get(task.priority)}"
+                    f"📍 Сегодня ({self.day_names[current_day]}): ▶️ Перенесено\n"
+                    f"📅 Завтра ({self.day_names[next_day]}): {self.priority_emojis.get(task.priority)} Будет выполнено\n"
+                    f"Приоритет сохранен: {self.priority_emojis.get(task.priority)}"
                 )
             else:  # Воскресенье - не переносим, только ставим статус
                 message = (
                     f"▶️ **Статус обновлен!**\n\n"
                     f"Задача: {task.task_text}\n"
-                    f"Воскресенье - перенос на следующую неделю не выполняется\n"
+                    f"📍 Воскресенье - перенос на следующую неделю не выполняется\n"
                     f"Статус: ▶️ Перенесено"
                 )
         else:
