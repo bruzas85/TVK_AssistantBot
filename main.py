@@ -394,12 +394,16 @@ class RunningListHandlers:
             return
 
         # Форматируем информацию
+        current_day_index = datetime.now().weekday()
+        current_day_name = self.day_names[current_day_index]
+
         days_info = ""
         for i, day_name in enumerate(self.day_names):
+            day_indicator = "🟢 СЕГОДНЯ" if i == current_day_index else ""
             if task.days_of_week[i]:
-                days_info += f"✅ {day_name}\n"
+                days_info += f"✅ {day_name} {day_indicator}\n"
             else:
-                days_info += f"⬜ {day_name}\n"
+                days_info += f"⬜ {day_name} {day_indicator}\n"
 
         current_status = self.get_current_day_status(task)
         status_info = current_status['status'] if current_status else 'Не начато'
@@ -409,6 +413,7 @@ class RunningListHandlers:
             f"**Задача:** {task.task_text}\n"
             f"**Приоритет:** {self.priority_emojis.get(task.priority)}\n"
             f"**Статус сегодня:** {status_info}\n"
+            f"**Текущий день:** {current_day_name}\n"
         )
 
         if task.description:
@@ -434,9 +439,8 @@ class RunningListHandlers:
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
-
     async def update_task_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обновляет статус задачи"""
+        """Обновляет статус задачи с улучшенной логикой переноса"""
         query = update.callback_query
         await query.answer()
 
@@ -457,7 +461,7 @@ class RunningListHandlers:
             await query.edit_message_text("❌ Задача не найдена")
             return
 
-        # Добавляем статус
+        # Добавляем запись в историю статусов
         status_record = {
             'status': status_type,
             'timestamp': datetime.now().isoformat(),
@@ -465,18 +469,44 @@ class RunningListHandlers:
         }
         task.status_history.append(status_record)
 
-        # Сохраняем
-        if self.storage.update_running_task(task):
+        # Обрабатываем перенос задачи
+        if status_type == "postponed":
+            current_day = datetime.now().weekday()  # 0=понедельник, 6=воскресенье
+
+            if current_day < 6:  # Если не воскресенье (0-5 = понедельник-суббота)
+                next_day = current_day + 1
+
+                # Сбрасываем текущий день и устанавливаем следующий
+                task.days_of_week[current_day] = False
+                task.days_of_week[next_day] = True
+
+                message = (
+                    f"▶️ **Задача перенесена!**\n\n"
+                    f"Задача: {task.task_text}\n"
+                    f"Перенесена с {self.day_names[current_day]} на {self.day_names[next_day]}\n"
+                    f"Приоритет: {self.priority_emojis.get(task.priority)}"
+                )
+            else:  # Воскресенье - не переносим, только ставим статус
+                message = (
+                    f"▶️ **Статус обновлен!**\n\n"
+                    f"Задача: {task.task_text}\n"
+                    f"Воскресенье - перенос на следующую неделю не выполняется\n"
+                    f"Статус: ▶️ Перенесено"
+                )
+        else:
+            # Для других статусов просто обновляем сообщение
             status_emoji = self.status_emojis.get(status_type, "✅")
-            await query.edit_message_text(
+            message = (
                 f"{status_emoji} **Статус обновлен!**\n\n"
                 f"Задача: {task.task_text}\n"
-                f"Статус: {status_emoji}",
-                parse_mode='Markdown'
+                f"Статус: {status_emoji} {status_type}"
             )
-        else:
-            await query.edit_message_text("❌ Ошибка при обновлении")
 
+        # Сохраняем изменения
+        if self.storage.update_running_task(task):
+            await query.edit_message_text(message, parse_mode='Markdown')
+        else:
+            await query.edit_message_text("❌ Ошибка при обновлении статуса")
     async def delete_task_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Подтверждение удаления"""
         query = update.callback_query
