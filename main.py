@@ -90,7 +90,7 @@ class StorageService:
 
             result = session.execute(text("""
                 INSERT INTO running_tasks (user_id, task_text, description, priority, days_of_week, status_history, created_at)
-                VALUES (:user_id, :task_text, :description, :priority, :days_of_week, :status_history, :created_at)
+                VALUES (:user_id, :task_text, :description, :priority, :days_of_week, :status_history, NOW())
                 RETURNING id
             """), {
                 'user_id': user_id,
@@ -98,8 +98,7 @@ class StorageService:
                 'description': description,
                 'priority': priority,
                 'days_of_week': days_json,
-                'status_history': status_history_json,
-                'created_at': datetime.now()
+                'status_history': status_history_json
             })
 
             task_id = result.scalar()
@@ -174,7 +173,6 @@ class StorageService:
 
     def update_running_task(self, task):
         if not self.use_database:
-            # Обновляем в памяти
             if task.user_id in self.memory_storage:
                 for i, t in enumerate(self.memory_storage[task.user_id]):
                     if t.id == task.id:
@@ -291,7 +289,6 @@ class RunningListHandlers:
 
         for i in range(7):
             if task.days_of_week[i]:
-                # Если это сегодня и есть статус
                 if i == current_day_index and current_status:
                     day_emojis += self.status_emojis.get(current_status['status'], "🟨")
                 else:
@@ -300,8 +297,6 @@ class RunningListHandlers:
                 day_emojis += "⬜"
 
         priority_emoji = self.priority_emojis.get(task.priority, "🟨")
-
-        # Добавляем индикатор описания если оно есть
         description_indicator = " 📝" if task.description else ""
 
         return f"{day_emojis} - {task.task_text} {priority_emoji}{description_indicator}"
@@ -315,13 +310,13 @@ class RunningListHandlers:
             keyboard = [[InlineKeyboardButton("➕ Создать первую задачу", callback_data="add_first_task")]]
             if update.callback_query:
                 await update.callback_query.edit_message_text(
-                    "📋 **Ваш Running List пуст**\n\nСоздайте свою первую задачу для отслеживания!",
+                    "📋 **Ваш Running List пуст**\n\nСоздайте свою первую задачу!",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='Markdown'
                 )
             else:
                 await update.message.reply_text(
-                    "📋 **Ваш Running List пуст**\n\nСоздайте свою первую задачу для отслеживания!",
+                    "📋 **Ваш Running List пуст**\n\nСоздайте свою первую задачу!",
                     reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='Markdown'
                 )
@@ -334,12 +329,9 @@ class RunningListHandlers:
 
         message += f"\n*Всего задач: {len(tasks)}*"
 
-        if not self.storage.use_database:
-            message += f"\n💡 *Задачи хранятся в памяти (перезагрузка очистит их)*"
-
         keyboard = [
             [InlineKeyboardButton("➕ Добавить задачу", callback_data="add_task")],
-            [InlineKeyboardButton("📝 Управление задачами", callback_data="manage_tasks")],
+            [InlineKeyboardButton("🛠️ Управление задачами", callback_data="manage_tasks")],
             [InlineKeyboardButton("🔄 Обновить", callback_data="refresh_list")]
         ]
 
@@ -365,11 +357,7 @@ class RunningListHandlers:
         tasks = self.storage.get_running_tasks(user_id)
 
         if not tasks:
-            await query.edit_message_text(
-                "📋 **Нет задач для управления**\n\nСоздайте сначала задачу!",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("➕ Создать задачу", callback_data="add_task")]])
-            )
+            await query.edit_message_text("📋 Нет задач для управления")
             return
 
         keyboard = []
@@ -382,12 +370,12 @@ class RunningListHandlers:
         keyboard.append([InlineKeyboardButton("📋 Назад к списку", callback_data="back_to_list")])
 
         await query.edit_message_text(
-            "🛠️ **Управление задачами**\n\nВыберите задачу для редактирования:",
+            "🛠️ **Управление задачами**\n\nВыберите задачу:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
     async def show_task_detail(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показывает детали задачи и управление"""
+        """Показывает детали задачи"""
         query = update.callback_query
         await query.answer()
 
@@ -405,7 +393,7 @@ class RunningListHandlers:
             await query.edit_message_text("❌ Задача не найдена")
             return
 
-        # Форматируем информацию о задаче
+        # Форматируем информацию
         days_info = ""
         for i, day_name in enumerate(self.day_names):
             if task.days_of_week[i]:
@@ -414,13 +402,13 @@ class RunningListHandlers:
                 days_info += f"⬜ {day_name}\n"
 
         current_status = self.get_current_day_status(task)
-        status_info = f"✅ Сегодня: {current_status['status'] if current_status else 'Не начато'}"
+        status_info = current_status['status'] if current_status else 'Не начато'
 
         message = (
             f"📝 **Детали задачи**\n\n"
             f"**Задача:** {task.task_text}\n"
             f"**Приоритет:** {self.priority_emojis.get(task.priority)}\n"
-            f"**Статус:** {status_info}\n"
+            f"**Статус сегодня:** {status_info}\n"
         )
 
         if task.description:
@@ -429,8 +417,7 @@ class RunningListHandlers:
         message += f"\n**Дни выполнения:**\n{days_info}"
 
         keyboard = [
-            [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_task_{task.id}")],
-            [InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_confirm_{task.id}")],
+            [InlineKeyboardButton("🗑️ Удалить задачу", callback_data=f"delete_confirm_{task.id}")],
             [
                 InlineKeyboardButton("✅ Выполнено", callback_data=f"status_completed_{task.id}"),
                 InlineKeyboardButton("🔳 Частично", callback_data=f"status_partial_{task.id}")
@@ -439,7 +426,7 @@ class RunningListHandlers:
                 InlineKeyboardButton("❌ Отменить", callback_data=f"status_cancelled_{task.id}"),
                 InlineKeyboardButton("▶️ Перенести", callback_data=f"status_postponed_{task.id}")
             ],
-            [InlineKeyboardButton("📋 Назад к управлению", callback_data="manage_tasks")]
+            [InlineKeyboardButton("📋 Назад", callback_data="manage_tasks")]
         ]
 
         await query.edit_message_text(
@@ -454,7 +441,7 @@ class RunningListHandlers:
         await query.answer()
 
         data_parts = query.data.split("_")
-        status_type = data_parts[1]  # completed, partial, cancelled, postponed
+        status_type = data_parts[1]
         task_id = int(data_parts[2])
         user_id = update.effective_user.id
 
@@ -470,7 +457,7 @@ class RunningListHandlers:
             await query.edit_message_text("❌ Задача не найдена")
             return
 
-        # Добавляем запись в историю статусов
+        # Добавляем статус
         status_record = {
             'status': status_type,
             'timestamp': datetime.now().isoformat(),
@@ -478,32 +465,27 @@ class RunningListHandlers:
         }
         task.status_history.append(status_record)
 
-        # Если задача переносится, перемещаем на следующий день
-        if status_type == "postponed":
-            next_day = (datetime.now().weekday() + 1) % 7
-            task.days_of_week[next_day] = True
-
-        # Сохраняем изменения
+        # Сохраняем
         if self.storage.update_running_task(task):
             status_emoji = self.status_emojis.get(status_type, "✅")
             await query.edit_message_text(
-                f"{status_emoji} *Статус задачи обновлен!*\n\n"
+                f"{status_emoji} **Статус обновлен!**\n\n"
                 f"Задача: {task.task_text}\n"
-                f"Новый статус: {status_emoji} {status_type}",
+                f"Статус: {status_emoji}",
                 parse_mode='Markdown'
             )
         else:
-            await query.edit_message_text("❌ Ошибка при обновлении статуса")
+            await query.edit_message_text("❌ Ошибка при обновлении")
 
     async def delete_task_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Подтверждение удаления задачи"""
+        """Подтверждение удаления"""
         query = update.callback_query
         await query.answer()
 
         task_id = int(query.data.replace("delete_confirm_", ""))
         user_id = update.effective_user.id
 
-        # Находим задачу для показа названия
+        # Находим задачу
         task = None
         tasks = self.storage.get_running_tasks(user_id)
         for t in tasks:
@@ -524,8 +506,8 @@ class RunningListHandlers:
 
         await query.edit_message_text(
             f"⚠️ **Подтверждение удаления**\n\n"
-            f"Вы уверены, что хотите удалить задачу?\n"
-            f"*{task.task_text}*\n\n"
+            f"Удалить задачу:\n"
+            f"*{task.task_text}*?\n\n"
             f"Это действие нельзя отменить!",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
@@ -540,52 +522,12 @@ class RunningListHandlers:
         user_id = update.effective_user.id
 
         if self.storage.delete_running_task(task_id, user_id):
-            await query.edit_message_text("✅ *Задача успешно удалена!*", parse_mode='Markdown')
+            await query.edit_message_text("✅ **Задача удалена!**", parse_mode='Markdown')
         else:
-            await query.edit_message_text("❌ Ошибка при удалении задачи")
-
-    async def edit_task_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Начинает редактирование задачи"""
-        query = update.callback_query
-        await query.answer()
-
-        task_id = int(query.data.replace("edit_task_", ""))
-        user_id = update.effective_user.id
-
-        # Находим задачу
-        task = None
-        tasks = self.storage.get_running_tasks(user_id)
-        for t in tasks:
-            if t.id == task_id:
-                task = t
-                break
-
-        if not task:
-            await query.edit_message_text("❌ Задача не найдена")
-            return
-
-        # Сохраняем задачу в context для редактирования
-        context.user_data['editing_task'] = task
-        context.user_data['edit_step'] = 'text'
-
-        keyboard = [
-            [InlineKeyboardButton("📝 Изменить текст", callback_data="edit_text")],
-            [InlineKeyboardButton("📋 Изменить описание", callback_data="edit_description")],
-            [InlineKeyboardButton("🎯 Изменить приоритет", callback_data="edit_priority")],
-            [InlineKeyboardButton("📅 Изменить дни", callback_data="edit_days")],
-            [InlineKeyboardButton("📋 Назад", callback_data=f"task_detail_{task.id}")]
-        ]
-
-        await query.edit_message_text(
-            f"✏️ **Редактирование задачи**\n\n"
-            f"*{task.task_text}*\n\n"
-            f"Что вы хотите изменить?",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+            await query.edit_message_text("❌ Ошибка при удалении")
 
     async def add_task_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Начинает процесс добавления задачи"""
+        """Начинает добавление задачи"""
         query = update.callback_query
         if query:
             await query.answer()
@@ -594,22 +536,26 @@ class RunningListHandlers:
             await update.message.reply_text("✏️ Введите текст новой задачи:")
 
         context.user_data['adding_task'] = True
-        context.user_data['new_task'] = {'days': [False] * 7, 'description': ''}
 
     async def handle_task_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обрабатывает текст задачи"""
         if context.user_data.get('adding_task'):
             task_text = update.message.text
-            context.user_data['new_task']['text'] = task_text
+            context.user_data['new_task'] = {
+                'text': task_text,
+                'days': [False] * 7,
+                'description': ''
+            }
             context.user_data['adding_task'] = False
 
+            keyboard = [
+                [InlineKeyboardButton("📋 Добавить описание", callback_data="add_description")],
+                [InlineKeyboardButton("⏩ Пропустить описание", callback_data="skip_description")]
+            ]
+
             await update.message.reply_text(
-                f"📝 Задача: *{task_text}*\n\n"
-                "Хотите добавить описание к задаче?",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📋 Да, добавить описание", callback_data="add_description")],
-                    [InlineKeyboardButton("⏩ Пропустить", callback_data="skip_description")]
-                ]),
+                f"📝 Задача: *{task_text}*\n\nДобавить описание?",
+                reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
 
@@ -631,13 +577,13 @@ class RunningListHandlers:
             [InlineKeyboardButton("⚡ Срочный", callback_data="priority_urgent")]
         ]
 
-        if hasattr(update, 'message'):
-            await update.message.reply_text(
+        if hasattr(update, 'callback_query'):
+            await update.callback_query.edit_message_text(
                 "🎯 Выберите приоритет задачи:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         else:
-            await update.callback_query.edit_message_text(
+            await update.message.reply_text(
                 "🎯 Выберите приоритет задачи:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
@@ -649,6 +595,7 @@ class RunningListHandlers:
 
         priority = query.data.replace("priority_", "")
         context.user_data['new_task']['priority'] = priority
+
         await self.show_days_selection(update, context)
 
     async def show_days_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -659,7 +606,7 @@ class RunningListHandlers:
         row = []
         for i, day in enumerate(self.day_names):
             is_selected = context.user_data['new_task']['days'][i]
-            button_text = f"✅ {day}" if is_selected else day
+            button_text = f"✅ {day}" if is_selected else f"⬜ {day}"
             row.append(InlineKeyboardButton(button_text, callback_data=f"day_{i}"))
             if len(row) == 3:
                 keyboard.append(row)
@@ -669,30 +616,15 @@ class RunningListHandlers:
 
         keyboard.append([InlineKeyboardButton("💾 Сохранить задачу", callback_data="save_task")])
 
-        days_status = ""
-        selected_days = []
-        for i, day_name in enumerate(self.day_names):
-            if context.user_data['new_task']['days'][i]:
-                days_status += f"✅ {day_name}\n"
-                selected_days.append(day_name)
-            else:
-                days_status += f"⬜ {day_name}\n"
-
+        # Формируем сообщение
+        task_text = context.user_data['new_task']['text']
+        description = context.user_data['new_task']['description']
         priority_emoji = self.priority_emojis.get(context.user_data['new_task']['priority'], "🟨")
-        description_text = f"\n📝 Описание: {context.user_data['new_task']['description']}" if \
-        context.user_data['new_task']['description'] else ""
 
-        message = (
-            f"📝 Задача: *{context.user_data['new_task']['text']}*{description_text}\n"
-            f"🎯 Приоритет: {priority_emoji}\n\n"
-        )
-
-        if selected_days:
-            message += f"📅 Выбранные дни:\n{days_status}\n"
-        else:
-            message += f"📅 Выберите дни выполнения:\n{days_status}\n"
-
-        message += "Нажмите на день чтобы выбрать/отменить:"
+        message = f"📝 *{task_text}*\n🎯 Приоритет: {priority_emoji}\n"
+        if description:
+            message += f"📋 Описание: {description}\n"
+        message += "\n📅 Выберите дни выполнения:"
 
         await query.edit_message_text(
             message,
@@ -701,12 +633,13 @@ class RunningListHandlers:
         )
 
     async def toggle_day(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Переключает выбор дня недели"""
+        """Переключает день недели"""
         query = update.callback_query
         await query.answer()
 
         day_index = int(query.data.replace("day_", ""))
         context.user_data['new_task']['days'][day_index] = not context.user_data['new_task']['days'][day_index]
+
         await self.show_days_selection(update, context)
 
     async def save_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -729,32 +662,26 @@ class RunningListHandlers:
 
         if task:
             context.user_data.pop('new_task', None)
-            context.user_data.pop('adding_task', None)
-
-            storage_info = ""
-            if not self.storage.use_database:
-                storage_info = "\n\n💡 *Задачи хранятся в памяти*"
-
             await query.edit_message_text(
-                f"✅ *Задача успешно добавлена в Running List!*{storage_info}\n\n"
-                "Используйте кнопку '📋 Running List' для просмотра всех задач.",
+                "✅ **Задача успешно сохранена!**\n\n"
+                "Используйте '📋 Running List' для просмотра.",
                 parse_mode='Markdown'
             )
         else:
             await query.edit_message_text(
-                "❌ *Ошибка при сохранении задачи.*\n\n"
+                "❌ **Ошибка при сохранении**\n\n"
                 "Попробуйте еще раз.",
                 parse_mode='Markdown'
             )
 
     async def refresh_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обновляет список задач"""
+        """Обновляет список"""
         query = update.callback_query
         await query.answer()
         await self.show_running_list(update, context)
 
 
-# Создаем экземпляр обработчиков
+# Создаем обработчики
 running_handlers = RunningListHandlers(storage_service)
 
 
@@ -763,13 +690,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     welcome_text = (
         f"Привет, {user.first_name}! 👋\n\n"
-        "Я TVK Assistant Bot - твой помощник в организации задач.\n\n"
-        "📋 **Доступные функции:**\n"
-        "• Running List - система повторяющихся задач ✅\n"
-        "• Табель учета рабочего времени ⏳\n"
-        "• Управление строительными объектами ⏳\n"
-        "• И многое другое!\n\n"
-        "✨ **Running List полностью готов к использованию!**"
+        "Я TVK Assistant Bot\n\n"
+        "📋 **Running List** - готов к работе!\n"
+        "• Создавайте задачи с описанием\n"
+        "• Управляйте статусами\n"
+        "• Отслеживайте выполнение\n\n"
+        "✨ **Новый функционал доступен!**"
     )
 
     keyboard = [
@@ -783,22 +709,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "🆘 **Помощь по TVK Assistant Bot**\n\n"
-        "📋 **Running List (ОБНОВЛЕН!):**\n"
-        "• Создавайте задачи с описанием\n"
-        "• Приоритеты: 🟦 Низкий, 🟨 Средний, 🟥 Высокий, ⚡ Срочный\n"
-        "• Назначайте дни выполнения\n"
-        "• Управляйте статусами: ✅ Выполнено, 🔳 Частично, ❌ Отменено, ▶️ Перенесено\n\n"
+        "🆘 **Помощь**\n\n"
+        "📋 **Running List:**\n"
+        "• Создавайте повторяющиеся задачи\n"
+        "• Статусы: ✅ 🔳 ❌ ▶️\n"
+        "• Приоритеты: 🟦 🟨 🟥 ⚡\n\n"
         "🎯 **Как использовать:**\n"
-        "1. '📋 Running List' - просмотр задач\n"
-        "2. '📝 Управление задачами' - редактирование\n"
-        "3. Выбирайте задачи для изменения статуса\n\n"
-        "🔧 **Статус функций:**\n"
-        "• 📋 Running List - ✅ ОБНОВЛЕН\n"
-        "• 📊 Табель - ⏳ В РАЗРАБОТКЕ\n"
-        "• 🏗️ Объекты - ⏳ В РАЗРАБОТКЕ\n"
-        "• 📝 Задачи - ⏳ В РАЗРАБОТКЕ\n"
-        "• ⚙️ Настройки - ⏳ В РАЗРАБОТКЕ"
+        "1. '📋 Running List' - просмотр\n"
+        "2. '🛠️ Управление задачами' - редактирование\n"
+        "3. Выбирайте задачи для изменения\n\n"
+        "📝 **Другие функции в разработке**"
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -808,15 +728,15 @@ async def running_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def timesheet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 **Табель учета рабочего времени**\n\n⏳ В разработке...")
+    await update.message.reply_text("📊 **Табель**\n\n⏳ В разработке...")
 
 
 async def objects_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏗️ **Строительные объекты**\n\n⏳ В разработке...")
+    await update.message.reply_text("🏗️ **Объекты**\n\n⏳ В разработке...")
 
 
 async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📝 **Общие задачи**\n\n⏳ В разработке...")
+    await update.message.reply_text("📝 **Задачи**\n\n⏳ В разработке...")
 
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -843,14 +763,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif context.user_data.get('adding_description'):
         await running_handlers.handle_task_description(update, context)
     else:
-        await update.message.reply_text("🤔 Не понял ваше сообщение. Используйте кнопки меню.")
+        await update.message.reply_text(
+            "🤔 Не понял сообщение\n\n"
+            "Используйте кнопки меню или /help"
+        )
 
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Главный обработчик callback запросов"""
     query = update.callback_query
     data = query.data
 
     try:
+        logger.info(f"📨 Callback received: {data}")
+
         if data == "add_task" or data == "add_first_task":
             await running_handlers.add_task_start(update, context)
         elif data == "add_description":
@@ -878,9 +804,63 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await running_handlers.delete_task_confirm(update, context)
         elif data.startswith("delete_task_"):
             await running_handlers.delete_task(update, context)
-        elif data.startswith("edit_task_"):
-            await running_handlers.edit_task_start(update, context)
         else:
-            await query.answer("Неизвестная команда")
+            await query.answer("❌ Неизвестная команда")
+
     except Exception as e:
-        logger.error(f"❌ Ошибка в callback {data}: {e}")
+        logger.error(f"💥 Ошибка в callback: {e}")
+        logger.error(traceback.format_exc())
+        await query.answer("❌ Произошла ошибка")
+
+
+def debug_database():
+    """Проверяет базу данных"""
+    try:
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            logger.warning("❌ DATABASE_URL не установлен")
+            return
+
+        engine = create_engine(database_url)
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT NOW() as time"))
+            time = result.scalar()
+            logger.info(f"✅ Подключение к БД успешно. Время сервера: {time}")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к БД: {e}")
+
+
+def main():
+    """Главная функция"""
+    try:
+        logger.info("🚀 Запуск TVK Assistant Bot...")
+
+        token = os.getenv('TELEGRAM_BOT_TOKEN')
+        if not token:
+            logger.error("❌ TELEGRAM_BOT_TOKEN не установлен!")
+            return
+
+        logger.info("✅ Токен получен")
+        debug_database()
+
+        # Создаем приложение
+        application = Application.builder().token(token).build()
+
+        # Добавляем обработчики
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("running_list", running_list_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(CallbackQueryHandler(handle_callback_query))
+
+        # Запускаем
+        logger.info("✅ Бот запущен")
+        application.run_polling(drop_pending_updates=True)
+
+    except Exception as e:
+        logger.critical(f"💥 Критическая ошибка: {e}")
+
+
+if __name__ == '__main__':
+    main()
