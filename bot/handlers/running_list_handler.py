@@ -1,286 +1,314 @@
-from telebot import types
-from .base_handler import BaseHandler
-from ..models.running_list import RunningTask, TaskPriority
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters
+import logging
+from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 
-class RunningListHandler(BaseHandler):
-    def __init__(self, bot, users_data):
-        super().__init__(bot, users_data)
+class RunningListHandlers:
+    def __init__(self, storage_service):
+        self.storage = storage_service
+        self.priority_emojis = {
+            "low": "🟦",
+            "medium": "🟨",
+            "high": "🟥",
+            "urgent": "⚡"
+        }
+        self.status_emojis = {
+            "completed": "✅",
+            "partial": "🔳",
+            "cancelled": "❌",
+            "postponed": "▶️"
+        }
+        self.day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
-    def handle_running_list_main(self, message):
-        self.set_user_state(message.chat.id, 'running_list_main')
+    def get_day_emoji(self, task, day_index, current_weekday=None):
+        """Возвращает эмодзи для дня недели"""
+        if not task.days_of_week[day_index]:
+            return "⬜"
 
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        btn_add_task = types.KeyboardButton('➕ Добавить задачу')
-        btn_view_tasks = types.KeyboardButton('📋 Список задач')
-        btn_completed_tasks = types.KeyboardButton('✅ Выполненные')
-        btn_back = types.KeyboardButton('назад')
-        markup.add(btn_add_task, btn_view_tasks, btn_completed_tasks, btn_back)
+        # Если это текущий день и есть статус
+        if current_weekday == day_index and task.status_history:
+            latest_status = task.status_history[-1]
+            status_day = latest_status.get('day')
+            status_type = latest_status.get('status')
 
-        user_data = self.get_user_data(message.chat.id)
-        active_count = len(user_data.running_list.get_active_tasks())
-        completed_count = len(user_data.running_list.get_completed_tasks())
+            if status_day == day_index and status_type in self.status_emojis:
+                return self.status_emojis[status_type]
 
-        response = f"""
-📋 Раздел: RUNNING LIST
+        return self.priority_emojis.get(task.priority, "🟨")
 
-Статистика:
-• Активных задач: {active_count}
-• Выполненных задач: {completed_count}
+    def format_task_display(self, task, current_weekday=None):
+        """Форматирует отображение задачи"""
+        day_emojis = "".join([self.get_day_emoji(task, i, current_weekday) for i in range(7)])
+        priority_emoji = self.priority_emojis.get(task.priority, "🟨")
 
-Приоритеты:
-🔵 Низкий - не срочно
-🟡 Средний - обычная важность  
-🔴 Высокий - важно
-⚡ Срочный - очень срочно
+        return f"{day_emojis} - {task.task_text} {priority_emoji}"
 
-Выберите действие:
-"""
-        self.bot.send_message(message.chat.id, response, reply_markup=markup)
+    async def show_running_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает running list пользователя"""
+        user_id = update.effective_user.id
+        tasks = self.storage.get_running_tasks(user_id)
 
-    def handle_add_task(self, message):
-        self.set_user_state(message.chat.id, 'waiting_task_description')
-
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        btn_back = types.KeyboardButton('назад')
-        markup.add(btn_back)
-
-        response = "➕ ДОБАВЛЕНИЕ ЗАДАЧИ\n\nВведите описание задачи:"
-        self.bot.send_message(message.chat.id, response, reply_markup=markup)
-
-    def handle_task_description_input(self, message):
-        chat_id = message.chat.id
-        description = message.text.strip()
-
-        if not description:
-            self.bot.send_message(chat_id, "❌ Описание задачи не может быть пустым.")
+        if not tasks:
+            await update.message.reply_text("Ваш running list пуст. Добавьте первую задачу!")
             return
 
-        user_data = self.get_user_data(chat_id)
-        user_data.temp_task_description = description
-        self.set_user_state(chat_id, 'waiting_task_priority')
+        current_weekday = datetime.now().weekday()  # 0 = Monday, 6 = Sunday
 
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("🔵 Низкий", callback_data="priority:LOW"),
-            types.InlineKeyboardButton("🟡 Средний", callback_data="priority:MEDIUM"),
-            types.InlineKeyboardButton("🔴 Высокий", callback_data="priority:HIGH"),
-            types.InlineKeyboardButton("⚡ Срочный", callback_data="priority:URGENT")
+        message = "📋 **Ваш Running List:**\n\n"
+        keyboard = []
+
+        for i, task in enumerate(tasks):
+            task_display = self.format_task_display(task, current_weekday)
+            message += f"{i + 1}. {task_display}\n"
+            keyboard.append([InlineKeyboardButton(
+                f"{i + 1}. {task.task_text}",
+                callback_data=f"task_detail_{task.id}"
+            )])
+
+        keyboard.append([InlineKeyboardButton("➕ Добавить задачу", callback_data="add_task")])
+
+        await update.message.reply_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
         )
 
-        response = f"📝 Задача: {description}\n\nВыберите приоритет:"
-        self.bot.send_message(chat_id, response, reply_markup=markup)
+    async def add_task_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Начинает процесс добавления задачи"""
+        query = update.callback_query
+        await query.answer()
 
-    def handle_running_list_callback(self, call):
-        chat_id = call.message.chat.id
-        data = call.data
+        await query.edit_message_text(
+            "Введите текст новой задачи:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="cancel_add")]])
+        )
 
-        print(f"DEBUG: Running list callback получен: {data}")
+    async def add_task_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Получает текст задачи и запрашивает приоритет"""
+        task_text = update.message.text
+        context.user_data['new_task'] = {'text': task_text}
 
-        if data.startswith("priority:"):
-            priority_name = data.split(":")[1]
-            print(f"DEBUG: Обработка приоритета: {priority_name}")
-            self.handle_priority_selection(call, priority_name)
-        else:
-            print(f"DEBUG: Неизвестный callback: {data}")
+        keyboard = [
+            [
+                InlineKeyboardButton("🟦 Низкий", callback_data="priority_low"),
+                InlineKeyboardButton("🟨 Средний", callback_data="priority_medium")
+            ],
+            [
+                InlineKeyboardButton("🟥 Высокий", callback_data="priority_high"),
+                InlineKeyboardButton("⚡ Срочный", callback_data="priority_urgent")
+            ],
+            [InlineKeyboardButton("❌ Отмена", callback_data="cancel_add")]
+        ]
 
-    def handle_priority_selection(self, call, priority_name: str):
-        chat_id = call.message.chat.id
-        user_data = self.get_user_data(chat_id)
+        await update.message.reply_text(
+            f"Задача: {task_text}\nВыберите приоритет:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-        print(f"DEBUG: handle_priority_selection вызван с priority_name: {priority_name}")
-        print(f"DEBUG: temp_task_description: {getattr(user_data, 'temp_task_description', 'НЕ НАЙДЕНО')}")
+    async def set_task_priority(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Устанавливает приоритет и запрашивает дни недели"""
+        query = update.callback_query
+        await query.answer()
 
-        try:
-            priority = TaskPriority[priority_name]
-            description = getattr(user_data, 'temp_task_description', '')
+        priority = query.data.replace("priority_", "")
+        context.user_data['new_task']['priority'] = priority
 
-            if not description:
-                print(f"DEBUG: Ошибка - описание задачи не найдено")
-                self.bot.send_message(chat_id, "❌ Ошибка: описание задачи не найдено.")
-                self.handle_running_list_main(call.message)
-                return
+        # Показываем выбор дней недели
+        keyboard = []
+        days_row = []
 
-            # Добавляем задачу
-            task = user_data.running_list.add_task(description, priority)
-            print(f"DEBUG: Задача добавлена: {task.description} с приоритетом {task.priority.value}")
+        for i, day in enumerate(self.day_names):
+            days_row.append(InlineKeyboardButton(
+                f"{day} ✅" if context.user_data['new_task'].get('days', {}).get(str(i)) else day,
+                callback_data=f"toggle_day_{i}"
+            ))
+            if len(days_row) == 3:  # 3 дня в строке
+                keyboard.append(days_row)
+                days_row = []
 
-            # АВТОСОХРАНЕНИЕ после добавления задачи
-            self._auto_save_user_data(chat_id)
+        if days_row:  # Добавляем оставшиеся дни
+            keyboard.append(days_row)
 
-            # Очищаем временные данные
-            if hasattr(user_data, 'temp_task_description'):
-                delattr(user_data, 'temp_task_description')
+        keyboard.extend([
+            [InlineKeyboardButton("✅ Сохранить задачу", callback_data="save_task")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="cancel_add")]
+        ])
 
-            # Удаляем сообщение с кнопками приоритета
-            try:
-                self.bot.delete_message(chat_id, call.message.message_id)
-            except:
-                pass
+        priority_emoji = self.priority_emojis.get(priority, "🟨")
+        await query.edit_message_text(
+            f"Задача: {context.user_data['new_task']['text']}\n"
+            f"Приоритет: {priority_emoji}\n\n"
+            f"Выберите дни недели для задачи:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-            self.bot.send_message(
-                chat_id,
-                f"✅ Задача добавлена!\n"
-                f"📝 {task.description}\n"
-                f"🎯 Приоритет: {task.priority.value}"
-            )
-            self.handle_running_list_main(call.message)
+    async def toggle_day(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Переключает выбор дня недели"""
+        query = update.callback_query
+        await query.answer()
 
-        except KeyError:
-            print(f"DEBUG: Ошибка - неверный приоритет: {priority_name}")
-            self.bot.send_message(chat_id, "❌ Ошибка: неверный приоритет.")
-            self.handle_running_list_main(call.message)
+        day_index = int(query.data.replace("toggle_day_", ""))
 
-    def _auto_save_user_data(self, chat_id: int):
-        """Автосохранение данных пользователя"""
-        try:
-            user_data = self.get_user_data(chat_id)
-            self.bot.storage_service.save_user_data(user_data)
-            print(f"DEBUG: Данные пользователя {chat_id} автосохранены")
-        except Exception as e:
-            print(f"DEBUG: Ошибка автосохранения: {e}")
-    def handle_view_tasks(self, message):
-        chat_id = message.chat.id
-        user_data = self.get_user_data(chat_id)
-        running_list = user_data.running_list
+        if 'days' not in context.user_data['new_task']:
+            context.user_data['new_task']['days'] = {}
 
-        active_tasks = running_list.get_active_tasks()
+        # Переключаем состояние дня
+        current_state = context.user_data['new_task']['days'].get(str(day_index), False)
+        context.user_data['new_task']['days'][str(day_index)] = not current_state
 
-        if not active_tasks:
-            response = "📋 АКТИВНЫЕ ЗАДАЧИ\n\n❌ Нет активных задач"
-            self.bot.send_message(chat_id, response)
+        # Обновляем клавиатуру
+        await self.set_task_priority(update, context)
+
+    async def save_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Сохраняет новую задачу"""
+        query = update.callback_query
+        await query.answer()
+
+        task_data = context.user_data['new_task']
+        days_of_week = [task_data.get('days', {}).get(str(i), False) for i in range(7)]
+
+        # Создаем задачу
+        task = self.storage.add_running_task(
+            user_id=update.effective_user.id,
+            task_text=task_data['text'],
+            priority=task_data['priority']
+        )
+
+        # Устанавливаем дни недели
+        task.days_of_week = days_of_week
+        self.storage.update_running_task(task)
+
+        # Очищаем временные данные
+        context.user_data.pop('new_task', None)
+
+        await query.edit_message_text(
+            "✅ Задача успешно добавлена в running list!"
+        )
+
+        # Показываем обновленный список
+        await self.show_running_list_after_save(update, context)
+
+    async def show_running_list_after_save(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает running list после сохранения"""
+        # Здесь можно отправить сообщение с обновленным списком
+        pass
+
+    async def task_detail(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает детали задачи"""
+        query = update.callback_query
+        await query.answer()
+
+        task_id = int(query.data.replace("task_detail_", ""))
+        task = self.storage.get_running_task(task_id)
+
+        if not task:
+            await query.edit_message_text("Задача не найдена")
             return
 
-        response = "📋 АКТИВНЫЕ ЗАДАЧИ\n\n"
+        current_weekday = datetime.now().weekday()
+        task_display = self.format_task_display(task, current_weekday)
 
-        # Группируем по приоритетам
-        for priority in TaskPriority:
-            tasks_by_priority = [t for t in active_tasks if t.priority == priority]
-            if tasks_by_priority:
-                response += f"\n{priority.value}:\n"
-                for i, task in enumerate(tasks_by_priority, 1):
-                    response += f"{i}. {task.description}\n"
+        # Формируем информацию о днях
+        days_info = ""
+        for i, day_name in enumerate(self.day_names):
+            emoji = self.get_day_emoji(task, i, current_weekday)
+            days_info += f"{day_name}: {emoji}\n"
 
-        response += f"\n✅ Для завершения задачи введите: /done <номер задачи>"
-        response += f"\n🗑️ Для удаления задачи введите: /delete <номер задачи>"
+        message = (
+            f"📝 **Детали задачи:**\n\n"
+            f"**Задача:** {task.task_text}\n"
+            f"**Приоритет:** {self.priority_emojis.get(task.priority)}\n\n"
+            f"**Дни недели:**\n{days_info}"
+        )
 
-        # Показываем нумерованный список для команд
-        response += f"\n\nНумерация для команд:"
-        for i, task in enumerate(active_tasks, 1):
-            response += f"\n{i}. {task.description}"
+        keyboard = [
+            [InlineKeyboardButton("✅ Выполнено", callback_data=f"complete_task_{task.id}")],
+            [InlineKeyboardButton("🔳 Частично", callback_data=f"partial_task_{task.id}")],
+            [InlineKeyboardButton("❌ Отменить", callback_data=f"cancel_task_{task.id}")],
+            [InlineKeyboardButton("▶️ Перенести", callback_data=f"postpone_task_{task.id}")],
+            [InlineKeyboardButton("📋 Назад к списку", callback_data="back_to_list")]
+        ]
 
-        self.bot.send_message(chat_id, response)
+        await query.edit_message_text(
+            message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
-    def handle_completed_tasks(self, message):
-        chat_id = message.chat.id
-        user_data = self.get_user_data(chat_id)
-        running_list = user_data.running_list
+    async def update_task_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обновляет статус задачи"""
+        query = update.callback_query
+        await query.answer()
 
-        completed_tasks = running_list.get_completed_tasks()
+        data_parts = query.data.split("_")
+        status_type = data_parts[0]  # complete, partial, cancel, postpone
+        task_id = int(data_parts[2])
 
-        if not completed_tasks:
-            response = "✅ ВЫПОЛНЕННЫЕ ЗАДАЧИ\n\n❌ Нет выполненных задач"
-            self.bot.send_message(chat_id, response)
-            return
+        task = self.storage.get_running_task(task_id)
+        current_weekday = datetime.now().weekday()
 
-        response = "✅ ВЫПОЛНЕННЫЕ ЗАДАЧИ\n\n"
+        # Добавляем запись в историю статусов
+        status_record = {
+            'day': current_weekday,
+            'status': status_type,
+            'timestamp': datetime.now().isoformat()
+        }
+        task.status_history.append(status_record)
 
-        for i, task in enumerate(completed_tasks, 1):
-            completed_date = task.completed_date.strftime('%d.%m.%Y %H:%M') if task.completed_date else "неизвестно"
-            response += f"{i}. {task.description}\n"
-            response += f"   🎯 {task.priority.value} | ✅ {completed_date}\n\n"
+        # Если задача переносится, перемещаем на следующий день
+        if status_type == "postpone":
+            next_day = (current_weekday + 1) % 7
+            task.days_of_week[next_day] = True
 
-        response += f"🔄 Для reopening задачи введите: /reopen <номер задачи>"
+        self.storage.update_running_task(task)
 
-        self.bot.send_message(chat_id, response)
+        await query.edit_message_text(
+            f"{self.status_emojis.get(status_type, '✅')} Статус задачи обновлен!"
+        )
 
-    def handle_complete_task(self, message, task_number: str):
-        chat_id = message.chat.id
-        user_data = self.get_user_data(chat_id)
-        running_list = user_data.running_list
+        # Возвращаем к списку задач
+        await self.show_running_list_after_save(update, context)
 
-        print(f"DEBUG: handle_complete_task вызван с номером: '{task_number}'")
 
-        try:
-            task_index = int(task_number) - 1
-            active_tasks = running_list.get_active_tasks()
+def setup_handlers(application, storage_service):
+    handlers = RunningListHandlers(storage_service)
 
-            if 0 <= task_index < len(active_tasks):
-                task = active_tasks[task_index]
-                task.complete()
+    # Добавляем обработчики
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handlers.add_task_text
+    ))
 
-                # АВТОСОХРАНЕНИЕ
-                self._auto_save_user_data(chat_id)
+    application.add_handler(CallbackQueryHandler(
+        handlers.show_running_list,
+        pattern="^back_to_list$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        handlers.add_task_start,
+        pattern="^add_task$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        handlers.set_task_priority,
+        pattern="^priority_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        handlers.toggle_day,
+        pattern="^toggle_day_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        handlers.save_task,
+        pattern="^save_task$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        handlers.task_detail,
+        pattern="^task_detail_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        handlers.update_task_status,
+        pattern="^(complete|partial|cancel|postpone)_task_"
+    ))
 
-                self.bot.send_message(
-                    chat_id,
-                    f"✅ Задача выполнена!\n"
-                    f"📝 {task.description}"
-                )
-                self.handle_view_tasks(message)
-            else:
-                self.bot.send_message(chat_id, "❌ Неверный номер задачи")
-
-        except ValueError:
-            self.bot.send_message(chat_id, "❌ Используйте: /done <номер задачи>")
-
-    def handle_delete_task(self, message, task_number: str):
-        chat_id = message.chat.id
-        user_data = self.get_user_data(chat_id)
-        running_list = user_data.running_list
-
-        print(f"DEBUG: handle_delete_task вызван с номером: '{task_number}'")
-
-        try:
-            task_index = int(task_number) - 1
-            active_tasks = running_list.get_active_tasks()
-
-            if 0 <= task_index < len(active_tasks):
-                task = active_tasks[task_index]
-                running_list.delete_task(task.id)
-
-                # АВТОСОХРАНЕНИЕ
-                self._auto_save_user_data(chat_id)
-
-                self.bot.send_message(
-                    chat_id,
-                    f"🗑️ Задача удалена!\n"
-                    f"📝 {task.description}"
-                )
-                self.handle_view_tasks(message)
-            else:
-                self.bot.send_message(chat_id, "❌ Неверный номер задачи")
-
-        except ValueError:
-            self.bot.send_message(chat_id, "❌ Используйте: /delete <номер задачи>")
-
-    def handle_reopen_task(self, message, task_number: str):
-        chat_id = message.chat.id
-        user_data = self.get_user_data(chat_id)
-        running_list = user_data.running_list
-
-        print(f"DEBUG: handle_reopen_task вызван с номером: '{task_number}'")
-
-        try:
-            task_index = int(task_number) - 1
-            completed_tasks = running_list.get_completed_tasks()
-
-            if 0 <= task_index < len(completed_tasks):
-                task = completed_tasks[task_index]
-                task.reopen()
-
-                # АВТОСОХРАНЕНИЕ
-                self._auto_save_user_data(chat_id)
-
-                self.bot.send_message(
-                    chat_id,
-                    f"🔄 Задача reopened!\n"
-                    f"📝 {task.description}"
-                )
-                self.handle_completed_tasks(message)
-            else:
-                self.bot.send_message(chat_id, "❌ Неверный номер задачи")
-
-        except ValueError:
-            self.bot.send_message(chat_id, "❌ Используйте: /reopen <номер задачи>")
-
+    return handlers

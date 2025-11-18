@@ -1,59 +1,73 @@
+from sqlalchemy import Column, Integer, String, Boolean, JSON, DateTime
 from datetime import datetime
-from typing import List, Optional
-from enum import Enum
-
-
-class TaskPriority(Enum):
-    LOW = "🔵 Низкий"
-    MEDIUM = "🟡 Средний"
-    HIGH = "🔴 Высокий"
-    URGENT = "⚡ Срочный"
+import json
 
 
 class RunningTask:
-    def __init__(self, description: str, priority: TaskPriority = TaskPriority.MEDIUM, task_id: Optional[str] = None):
-        self.id = task_id or str(datetime.now().timestamp())
-        self.description = description
-        self.priority = priority
-        self.created_date = datetime.now()
-        self.is_completed = False
-        self.completed_date: Optional[datetime] = None
-        self.due_date: Optional[datetime] = None
+    def __init__(self, id=None, user_id=None, task_text="", priority="medium",
+                 days_of_week=None, status_history=None, created_at=None):
+        self.id = id
+        self.user_id = user_id
+        self.task_text = task_text
+        self.priority = priority  # "low", "medium", "high", "urgent"
+        self.days_of_week = days_of_week or [False] * 7  # [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+        self.status_history = status_history or []
+        self.created_at = created_at or datetime.now()
 
-    def complete(self):
-        self.is_completed = True
-        self.completed_date = datetime.now()
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'task_text': self.task_text,
+            'priority': self.priority,
+            'days_of_week': self.days_of_week,
+            'status_history': self.status_history,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
 
-    def reopen(self):
-        self.is_completed = False
-        self.completed_date = None
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            id=data.get('id'),
+            user_id=data.get('user_id'),
+            task_text=data.get('task_text', ''),
+            priority=data.get('priority', 'medium'),
+            days_of_week=data.get('days_of_week', [False] * 7),
+            status_history=data.get('status_history', []),
+            created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None
+        )
 
 
-class RunningList:
-    def __init__(self, chat_id: int):
-        self.chat_id = chat_id
-        self.tasks: List[RunningTask] = []
+# Для хранения в PostgreSQL
+class RunningTaskDB:
+    __tablename__ = 'running_tasks'
 
-    def add_task(self, description: str, priority: TaskPriority = TaskPriority.MEDIUM) -> RunningTask:
-        task = RunningTask(description, priority)
-        self.tasks.append(task)
-        return task
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False)
+    task_text = Column(String, nullable=False)
+    priority = Column(String, default='medium')
+    days_of_week = Column(String)  # JSON array as string
+    status_history = Column(String)  # JSON array as string
+    created_at = Column(DateTime, default=datetime.now)
 
-    def get_task(self, task_id: str) -> Optional[RunningTask]:
-        return next((task for task in self.tasks if task.id == task_id), None)
+    def to_running_task(self):
+        return RunningTask(
+            id=self.id,
+            user_id=self.user_id,
+            task_text=self.task_text,
+            priority=self.priority,
+            days_of_week=json.loads(self.days_of_week) if self.days_of_week else [False] * 7,
+            status_history=json.loads(self.status_history) if self.status_history else [],
+            created_at=self.created_at
+        )
 
-    def delete_task(self, task_id: str) -> bool:
-        task = self.get_task(task_id)
-        if task:
-            self.tasks.remove(task)
-            return True
-        return False
-
-    def get_active_tasks(self) -> List[RunningTask]:
-        return [task for task in self.tasks if not task.is_completed]
-
-    def get_completed_tasks(self) -> List[RunningTask]:
-        return [task for task in self.tasks if task.is_completed]
-
-    def get_tasks_by_priority(self, priority: TaskPriority) -> List[RunningTask]:
-        return [task for task in self.tasks if task.priority == priority and not task.is_completed]
+    @classmethod
+    def from_running_task(cls, task):
+        return cls(
+            user_id=task.user_id,
+            task_text=task.task_text,
+            priority=task.priority,
+            days_of_week=json.dumps(task.days_of_week),
+            status_history=json.dumps(task.status_history),
+            created_at=task.created_at
+        )

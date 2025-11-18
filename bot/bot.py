@@ -10,6 +10,9 @@ from .handlers.timesheet_handler import TimesheetHandler
 from .handlers.construction_handler import ConstructionHandler
 from .services.storage_service import JSONStorageService
 from .handlers.running_list_handler import RunningListHandler
+# ДОБАВИТЬ эти импорты:
+from .managers.running_list_manager import RunningListManager
+from .models.running_task import Priority, TaskStatus
 
 
 class FinanceBot:
@@ -30,7 +33,14 @@ class FinanceBot:
         self.report_handler = ReportHandler(self.bot, self.users_data)
         self.timesheet_handler = TimesheetHandler(self.bot, self.users_data)
         self.construction_handler = ConstructionHandler(self.bot, self.users_data)
-        self.running_list_handler = RunningListHandler(self.bot, self.users_data)
+
+        # ДОБАВИТЬ инициализацию RunningListHandler с менеджером
+        self.running_list_manager = RunningListManager()
+        self.running_list_handler = RunningListHandler(
+            self.bot,
+            self.users_data,
+            self.running_list_manager  # Передаем менеджер
+        )
 
         self._register_handlers()
         atexit.register(self._save_all_data)
@@ -39,6 +49,11 @@ class FinanceBot:
         """Сохраняет все данные при завершении работы"""
         print("Сохранение данных...")
         self.storage_service.save_all_data(self.users_data)
+
+        # ДОБАВИТЬ сохранение Running List данных
+        if hasattr(self, 'running_list_manager'):
+            self.running_list_manager.save_data()
+
         print("Данные сохранены!")
 
     def _register_handlers(self):
@@ -68,7 +83,8 @@ class FinanceBot:
 
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         buttons = [
-            'расходы', 'табель', '🏗 Стройобъекты', '📋 Running List', 'СП мусоропровод',
+            'расходы', 'табель', '🏗 Стройобъекты',
+            '📋 Running List', 'СП мусоропровод',  # Убедитесь, что Running List есть здесь
             'расчёт расходов', 'очистить данные'
         ]
         for button in buttons:
@@ -106,6 +122,16 @@ class FinanceBot:
 
         print(f"Получено сообщение: '{text}' от пользователя {chat_id}, состояние: {user_data.state}")
 
+        # Обработка состояний Running List (ПЕРВЫМИ!)
+        if user_data.state == 'waiting_task_description':
+            print(f"DEBUG: Обнаружено состояние 'waiting_task_description', передаем в running_list_handler")
+            self.running_list_handler.handle_task_description_input(message)
+            return
+
+        if user_data.state == 'waiting_task_name':
+            self.running_list_handler.handle_task_name_input(message)
+            return
+
         # Обработка команд Running List
         if text.startswith('/done'):
             task_number = text.split(' ', 1)[1] if ' ' in text else ""
@@ -137,10 +163,25 @@ class FinanceBot:
                 self.bot.send_message(chat_id, "❌ Сначала выберите объект в разделе 'Управление объектом'")
                 return
 
-        # Обработка состояний Running List (ПЕРЕМЕЩАЕМ В НАЧАЛО, ПЕРЕД другими состояниями)
-        if user_data.state == 'waiting_task_description':
-            print(f"DEBUG: Обнаружено состояние 'waiting_task_description', передаем в running_list_handler")
-            self.running_list_handler.handle_task_description_input(message)
+        # Обработка основных кнопок меню Running List
+        if text == '📋 Running List':
+            print(f"DEBUG: Нажата кнопка '📋 Running List'")
+            self.running_list_handler.handle_running_list_main(message)
+            return
+
+        if text == '➕ Добавить задачу':
+            print(f"DEBUG: Нажата кнопка '➕ Добавить задачу'")
+            self.running_list_handler.handle_add_task(message)
+            return
+
+        if text == '📋 Список задач':
+            print(f"DEBUG: Нажата кнопка '📋 Список задач'")
+            self.running_list_handler.handle_view_tasks(message)
+            return
+
+        if text == '✅ Выполненные':
+            print(f"DEBUG: Нажата кнопка '✅ Выполненные'")
+            self.running_list_handler.handle_completed_tasks(message)
             return
 
         # Обработка состояний строительных объектов
@@ -255,8 +296,8 @@ class FinanceBot:
         chat_id = call.message.chat.id
         user_data = self._get_user_data(chat_id)
 
-        # Обработка callback для running list (ПЕРВЫМ ДЕЛОМ!)
-        if call.data.startswith("priority:"):
+        # Обработка callback для Running List (ПЕРВЫМ ДЕЛОМ!)
+        if call.data.startswith(("priority:", "day_select:", "task_detail:")):
             self.running_list_handler.handle_running_list_callback(call)
             return
 
