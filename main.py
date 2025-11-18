@@ -1,6 +1,7 @@
 import os
 import logging
 import json
+import traceback
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters,
@@ -8,6 +9,7 @@ from telegram.ext import (
 )
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import SQLAlchemyError
 
 # Настройка логирования
 logging.basicConfig(
@@ -32,40 +34,53 @@ class RunningTask:
 class StorageService:
     def __init__(self):
         self.database_url = os.getenv('DATABASE_URL')
+        logger.info(
+            f"🔧 Инициализация StorageService, DATABASE_URL: {'✅ Установлен' if self.database_url else '❌ Отсутствует'}")
+
         if self.database_url:
-            self.engine = create_engine(self.database_url)
-            self.Session = sessionmaker(bind=self.engine)
+            try:
+                self.engine = create_engine(self.database_url)
+                self.Session = sessionmaker(bind=self.engine)
+                logger.info("✅ Двигатель SQLAlchemy создан успешно")
+            except Exception as e:
+                logger.error(f"❌ Ошибка создания двигателя SQLAlchemy: {e}")
+                self.engine = None
+                self.Session = None
         else:
             self.engine = None
             self.Session = None
 
     def add_running_task(self, user_id, task_text, priority="medium", days_of_week=None):
         if not self.engine:
-            logger.warning("База данных не доступна, задача не сохранена")
+            logger.error("❌ База данных не доступна - двигатель не инициализирован")
             return None
 
+        session = None
         try:
             session = self.Session()
             days_json = json.dumps(days_of_week or [False] * 7)
+            status_history_json = json.dumps([])
 
+            logger.info(f"💾 Попытка сохранения задачи: user_id={user_id}, text='{task_text}', priority={priority}")
+
+            # Используем простой INSERT без RETURNING для большей совместимости
             result = session.execute(text("""
                 INSERT INTO running_tasks (user_id, task_text, priority, days_of_week, status_history)
                 VALUES (:user_id, :task_text, :priority, :days_of_week, :status_history)
-                RETURNING id, created_at
             """), {
                 'user_id': user_id,
                 'task_text': task_text,
                 'priority': priority,
                 'days_of_week': days_json,
-                'status_history': json.dumps([])
+                'status_history': status_history_json
             })
 
-            row = result.fetchone()
-            task_id, created_at = row
-            session.commit()
-            session.close()
+            # Получаем ID последней вставленной записи
+            result = session.execute(text("SELECT LASTVAL()"))
+            task_id = result.scalar()
 
-            logger.info(f"✅ Задача сохранена в БД, ID: {task_id}")
+            session.commit()
+            logger.info(f"✅ Задача успешно сохранена в БД, ID: {task_id}")
 
             return RunningTask(
                 id=task_id,
@@ -74,19 +89,35 @@ class StorageService:
                 priority=priority,
                 days_of_week=days_of_week,
                 status_history=[],
-                created_at=created_at
+                created_at=None  # БД сама установит timestamp
             )
-        except Exception as e:
-            logger.error(f"❌ Ошибка при добавлении задачи: {e}")
+
+        except SQLAlchemyError as e:
+            logger.error(f"❌ Ошибка SQLAlchemy при добавлении задачи: {e}")
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            if session:
+                session.rollback()
             return None
+        except Exception as e:
+            logger.error(f"❌ Неожиданная ошибка при добавлении задачи: {e}")
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            if session:
+                session.rollback()
+            return None
+        finally:
+            if session:
+                session.close()
 
     def get_running_tasks(self, user_id):
         if not self.engine:
-            logger.warning("База данных не доступна")
+            logger.warning("❌ База данных не доступна для чтения")
             return []
 
+        session = None
         try:
             session = self.Session()
+            logger.info(f"🔍 Поиск задач для пользователя {user_id}")
+
             result = session.execute(text("""
                 SELECT id, user_id, task_text, priority, days_of_week, status_history, created_at
                 FROM running_tasks 
@@ -96,22 +127,35 @@ class StorageService:
 
             tasks = []
             for row in result:
-                tasks.append(RunningTask(
-                    id=row[0],
-                    user_id=row[1],
-                    task_text=row[2],
-                    priority=row[3],
-                    days_of_week=json.loads(row[4]) if row[4] else [False] * 7,
-                    status_history=json.loads(row[5]) if row[5] else [],
-                    created_at=row[6]
-                ))
+                try:
+                    days_of_week = json.loads(row[4]) if row[4] else [False] * 7
+                    status_history = json.loads(row[5]) if row[5] else []
 
-            session.close()
-            logger.info(f"✅ Загружено {len(tasks)} задач для пользователя {user_id}")
+                    tasks.append(RunningTask(
+                        id=row[0],
+                        user_id=row[1],
+                        task_text=row[2],
+                        priority=row[3],
+                        days_of_week=days_of_week,
+                        status_history=status_history,
+                        created_at=row[6]
+                    ))
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Ошибка парсинга JSON для задачи {row[0]}: {e}")
+                    continue
+
+            logger.info(f"✅ Успешно загружено {len(tasks)} задач для пользователя {user_id}")
             return tasks
-        except Exception as e:
-            logger.error(f"❌ Ошибка при получении задач: {e}")
+
+        except SQLAlchemyError as e:
+            logger.error(f"❌ Ошибка SQLAlchemy при загрузке задач: {e}")
             return []
+        except Exception as e:
+            logger.error(f"❌ Неожиданная ошибка при загрузке задач: {e}")
+            return []
+        finally:
+            if session:
+                session.close()
 
 
 # Глобальный экземпляр storage
@@ -144,12 +188,13 @@ class RunningListHandlers:
     async def show_running_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает running list пользователя"""
         user_id = update.effective_user.id
+        logger.info(f"🔍 Запрос Running List от пользователя {user_id}")
+
         tasks = self.storage.get_running_tasks(user_id)
 
-        logger.info(f"🔍 Поиск задач для пользователя {user_id}. Найдено: {len(tasks)}")
+        logger.info(f"📊 Найдено задач: {len(tasks)}")
 
         if not tasks:
-            # Если задач нет, предлагаем создать первую
             keyboard = [
                 [InlineKeyboardButton("➕ Создать первую задачу", callback_data="add_first_task")]
             ]
@@ -169,13 +214,11 @@ class RunningListHandlers:
                 )
             return
 
-        # Показываем список задач
         message = "📋 **Ваш Running List:**\n\n"
         for i, task in enumerate(tasks):
             task_display = self.format_task_display(task)
             message += f"{i + 1}. {task_display}\n"
 
-        # Клавиатура для управления
         keyboard = [
             [InlineKeyboardButton("➕ Добавить задачу", callback_data="add_task")],
             [InlineKeyboardButton("🔄 Обновить", callback_data="refresh_list")]
@@ -203,7 +246,6 @@ class RunningListHandlers:
         else:
             await update.message.reply_text("✏️ Введите текст новой задачи:")
 
-        # Сохраняем состояние в context
         context.user_data['adding_task'] = True
 
     async def handle_task_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -217,7 +259,6 @@ class RunningListHandlers:
 
         logger.info(f"📝 Пользователь ввел текст задачи: {task_text}")
 
-        # Клавиатура для выбора приоритета
         keyboard = [
             [
                 InlineKeyboardButton("🟦 Низкий", callback_data="priority_low"),
@@ -244,15 +285,12 @@ class RunningListHandlers:
         context.user_data['new_task']['priority'] = priority
 
         logger.info(f"🎯 Выбран приоритет: {priority}")
-
-        # Обновляем сообщение с выбором дней
         await self.show_days_selection(update, context)
 
     async def show_days_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает выбор дней недели"""
         query = update.callback_query
 
-        # Создаем клавиатуру для выбора дней недели
         keyboard = []
         row = []
         for i, day in enumerate(self.day_names):
@@ -267,7 +305,6 @@ class RunningListHandlers:
 
         keyboard.append([InlineKeyboardButton("💾 Сохранить задачу", callback_data="save_task")])
 
-        # Формируем текст выбранных дней
         days_status = ""
         selected_days = []
         for i, day_name in enumerate(self.day_names):
@@ -303,13 +340,9 @@ class RunningListHandlers:
         await query.answer()
 
         day_index = int(query.data.replace("day_", ""))
-
-        # Переключаем состояние дня
         context.user_data['new_task']['days'][day_index] = not context.user_data['new_task']['days'][day_index]
 
-        logger.info(f"📅 Изменен день {self.day_names[day_index]}: {context.user_data['new_task']['days'][day_index]}")
-
-        # Обновляем сообщение
+        logger.info(f"📅 Изменен день {self.day_names[day_index]}")
         await self.show_days_selection(update, context)
 
     async def save_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -320,9 +353,11 @@ class RunningListHandlers:
         task_data = context.user_data['new_task']
         user_id = update.effective_user.id
 
-        logger.info(f"💾 Сохранение задачи для пользователя {user_id}: {task_data}")
+        logger.info(f"💾 Попытка сохранения задачи для пользователя {user_id}")
 
-        # Сохраняем задачу
+        # Показываем сообщение о сохранении
+        await query.edit_message_text("⏳ Сохраняем задачу...")
+
         task = self.storage.add_running_task(
             user_id=user_id,
             task_text=task_data['text'],
@@ -331,7 +366,6 @@ class RunningListHandlers:
         )
 
         if task:
-            # Очищаем временные данные
             context.user_data.pop('new_task', None)
             context.user_data.pop('adding_task', None)
 
@@ -343,9 +377,10 @@ class RunningListHandlers:
                 parse_mode='Markdown'
             )
         else:
+            logger.error("❌ Не удалось сохранить задачу в БД")
             await query.edit_message_text(
                 "❌ *Ошибка при сохранении задачи.*\n\n"
-                "Попробуйте еще раз или обратитесь к администратору.",
+                "Попробуйте еще раз. Если ошибка повторяется, обратитесь к администратору.",
                 parse_mode='Markdown'
             )
 
@@ -368,14 +403,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Привет, {user.first_name}! 👋\n\n"
         "Я TVK Assistant Bot - твой помощник в организации задач.\n\n"
         "📋 **Доступные функции:**\n"
-        "• Running List - система повторяющихся задач\n"
-        "• Табель учета рабочего времени\n"
-        "• Управление строительными объектами\n"
+        "• Running List - система повторяющихся задач ✅\n"
+        "• Табель учета рабочего времени ⏳\n"
+        "• Управление строительными объектами ⏳\n"
         "• И многое другое!\n\n"
-        "✨ **Running List обновлен!**"
+        "✨ **Running List полностью готов к использованию!**"
     )
 
-    # ВОССТАНАВЛИВАЕМ ВСЕ КНОПКИ
     keyboard = [
         [KeyboardButton("📋 Running List"), KeyboardButton("📊 Табель")],
         [KeyboardButton("🏗️ Объекты"), KeyboardButton("📝 Задачи")],
@@ -390,7 +424,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
     help_text = (
         "🆘 **Помощь по TVK Assistant Bot**\n\n"
-        "📋 **Running List (НОВОЕ):**\n"
+        "📋 **Running List (ГОТОВО!):**\n"
         "• Создавайте повторяющиеся задачи\n"
         "• Приоритеты: 🟦 Низкий, 🟨 Средний, 🟥 Высокий, ⚡ Срочный\n"
         "• Назначайте дни выполнения\n\n"
@@ -399,12 +433,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "2. '➕ Добавить задачу' для создания\n"
         "3. Выберите приоритет и дни недели\n"
         "4. Отслеживайте выполнение\n\n"
-        "🔧 **Все функции:**\n"
-        "• 📋 Running List - задачи\n"
-        "• 📊 Табель - учет времени\n"
-        "• 🏗️ Объекты - стройобъекты\n"
-        "• 📝 Задачи - общие задачи\n"
-        "• ⚙️ Настройки - настройки бота"
+        "🔧 **Статус функций:**\n"
+        "• 📋 Running List - ✅ РАБОТАЕТ\n"
+        "• 📊 Табель - ⏳ В РАЗРАБОТКЕ\n"
+        "• 🏗️ Объекты - ⏳ В РАЗРАБОТКЕ\n"
+        "• 📝 Задачи - ⏳ В РАЗРАБОТКЕ\n"
+        "• ⚙️ Настройки - ⏳ В РАЗРАБОТКЕ"
     )
 
     await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -418,29 +452,47 @@ async def running_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
 async def timesheet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик табеля"""
     await update.message.reply_text(
-        "📊 **Табель учета рабочего времени**\n\nФункция временно недоступна. Скоро вернемся!")
+        "📊 **Табель учета рабочего времени**\n\n"
+        "⏳ Эта функция находится в разработке.\n"
+        "Скоро здесь будет учет рабочего времени!\n\n"
+        "📋 А пока попробуйте новую систему **Running List** - она уже работает! 🚀"
+    )
 
 
 async def objects_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик строительных объектов"""
-    await update.message.reply_text("🏗️ **Строительные объекты**\n\nФункция временно недоступна. Скоро вернемся!")
+    await update.message.reply_text(
+        "🏗️ **Строительные объекты**\n\n"
+        "⏳ Эта функция находится в разработке.\n"
+        "Скоро здесь будет управление строительными объектами!\n\n"
+        "📋 А пока попробуйте новую систему **Running List** - она уже работает! 🚀"
+    )
 
 
 async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик общих задач"""
-    await update.message.reply_text("📝 **Общие задачи**\n\nФункция временно недоступна. Скоро вернемся!")
+    await update.message.reply_text(
+        "📝 **Общие задачи**\n\n"
+        "⏳ Эта функция находится в разработке.\n"
+        "Скоро здесь будет управление общими задачами!\n\n"
+        "📋 А пока попробуйте новую систему **Running List** - она уже работает! 🚀"
+    )
 
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик настроек"""
-    await update.message.reply_text("⚙️ **Настройки**\n\nФункция временно недоступна. Скоро вернемся!")
+    await update.message.reply_text(
+        "⚙️ **Настройки**\n\n"
+        "⏳ Эта функция находится в разработке.\n"
+        "Скоро здесь будут настройки бота!\n\n"
+        "📋 А пока попробуйте новую систему **Running List** - она уже работает! 🚀"
+    )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик текстовых сообщений"""
     text = update.message.text
 
-    # Обработка основных кнопок
     if text == "📋 Running List":
         await running_handlers.show_running_list(update, context)
     elif text == "📊 Табель":
@@ -454,7 +506,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "⚙️ Настройки":
         await settings_command(update, context)
     elif context.user_data.get('adding_task'):
-        # Если пользователь в процессе добавления задачи
         await running_handlers.handle_task_text(update, context)
     else:
         await update.message.reply_text(
@@ -485,8 +536,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             await query.answer("Неизвестная команда")
     except Exception as e:
-        logger.error(f"❌ Ошибка в callback: {e}")
-        await query.answer("Произошла ошибка")
+        logger.error(f"❌ Ошибка в callback {data}: {e}")
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        await query.answer("Произошла ошибка, попробуйте еще раз")
 
 
 def debug_database():
@@ -494,8 +546,10 @@ def debug_database():
     try:
         database_url = os.getenv('DATABASE_URL')
         if not database_url:
-            logger.warning("DATABASE_URL не установлен")
+            logger.warning("❌ DATABASE_URL не установлен")
             return
+
+        logger.info(f"🔧 Проверка подключения к БД: {database_url}")
 
         engine = create_engine(database_url)
         with engine.connect() as conn:
@@ -504,18 +558,23 @@ def debug_database():
                 SELECT table_name 
                 FROM information_schema.tables 
                 WHERE table_schema = 'public'
+                ORDER BY table_name
             """))
             tables = [row[0] for row in result]
-            logger.info(f"✅ Существующие таблицы в БД: {tables}")
+            logger.info(f"📊 Существующие таблицы в БД ({len(tables)}): {tables}")
 
             # Проверяем running_tasks
             if 'running_tasks' in tables:
-                result = conn.execute(text("SELECT COUNT(*) FROM running_tasks"))
-                count = result.scalar()
-                logger.info(f"✅ Количество задач в running_tasks: {count}")
+                result = conn.execute(
+                    text("SELECT COUNT(*) as count, MAX(created_at) as last_created FROM running_tasks"))
+                row = result.fetchone()
+                logger.info(f"✅ running_tasks: {row[0]} записей, последняя: {row[1]}")
+            else:
+                logger.error("❌ Таблица running_tasks не найдена!")
 
     except Exception as e:
         logger.error(f"❌ Ошибка при проверке БД: {e}")
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
 
 
 def check_and_run_migrations():
@@ -523,7 +582,7 @@ def check_and_run_migrations():
     try:
         database_url = os.getenv('DATABASE_URL')
         if not database_url:
-            logger.warning("DATABASE_URL не установлен, пропускаем миграции")
+            logger.warning("❌ DATABASE_URL не установлен, пропускаем миграции")
             return
 
         engine = create_engine(database_url)
@@ -538,7 +597,7 @@ def check_and_run_migrations():
             table_exists = result.scalar()
 
             if not table_exists:
-                logger.info("Создаем таблицу running_tasks...")
+                logger.info("🔄 Создаем таблицу running_tasks...")
                 conn.execute(text("""
                     CREATE TABLE running_tasks (
                         id SERIAL PRIMARY KEY,
@@ -556,24 +615,26 @@ def check_and_run_migrations():
                 logger.info("✅ Таблица running_tasks уже существует")
 
     except Exception as e:
-        logger.error(f"Ошибка при применении миграций: {e}")
+        logger.error(f"❌ Ошибка при применении миграций: {e}")
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
 
 
 def main():
     """Основная функция запуска бота"""
     try:
-        logger.info("=" * 50)
-        logger.info("ЗАПУСК TVK ASSISTANT BOT")
-        logger.info("Ветка: development")
-        logger.info("=" * 50)
+        logger.info("=" * 60)
+        logger.info("🚀 ЗАПУСК TVK ASSISTANT BOT - DEVELOPMENT")
+        logger.info("=" * 60)
 
         # Проверяем переменные окружения
         token = os.getenv('TELEGRAM_BOT_TOKEN')
         if not token:
-            logger.error("TELEGRAM_BOT_TOKEN не установлен!")
+            logger.error("❌ TELEGRAM_BOT_TOKEN не установлен!")
             return
 
-        # Отладочная информация
+        logger.info("✅ TELEGRAM_BOT_TOKEN получен")
+
+        # Отладочная информация о БД
         debug_database()
 
         # Проверяем миграции
@@ -582,15 +643,11 @@ def main():
         # Создаем приложение
         application = Application.builder().token(token).build()
 
-        # Добавляем обработчики команд
+        # Добавляем обработчики
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("running_list", running_list_command))
-
-        # Добавляем обработчики сообщений
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-        # Добавляем обработчики callback (для inline кнопок)
         application.add_handler(CallbackQueryHandler(handle_callback_query))
 
         # Запускаем бота
@@ -600,7 +657,8 @@ def main():
         application.run_polling(drop_pending_updates=True)
 
     except Exception as e:
-        logger.critical(f"❌ Критическая ошибка при запуске бота: {e}")
+        logger.critical(f"💥 Критическая ошибка при запуске бота: {e}")
+        logger.critical(f"💥 Traceback: {traceback.format_exc()}")
 
 
 if __name__ == '__main__':
