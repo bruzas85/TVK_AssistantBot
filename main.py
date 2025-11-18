@@ -426,8 +426,155 @@ class RunningListHandlers:
 running_handlers = RunningListHandlers(storage_service)
 
 
-# ... остальной код (start, help_command, и т.д.) остается без изменений ...
-# Используйте тот же код что был в предыдущем сообщении для этих функций
+# ОСНОВНЫЕ ФУНКЦИИ БОТА - должны быть определены ДО их использования в обработчиках
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /start"""
+    user = update.effective_user
+
+    welcome_text = (
+        f"Привет, {user.first_name}! 👋\n\n"
+        "Я TVK Assistant Bot - твой помощник в организации задач.\n\n"
+        "📋 **Доступные функции:**\n"
+        "• Running List - система повторяющихся задач ✅\n"
+        "• Табель учета рабочего времени ⏳\n"
+        "• Управление строительными объектами ⏳\n"
+        "• И многое другое!\n\n"
+        "✨ **Running List полностью готов к использованию!**"
+    )
+
+    keyboard = [
+        [KeyboardButton("📋 Running List"), KeyboardButton("📊 Табель")],
+        [KeyboardButton("🏗️ Объекты"), KeyboardButton("📝 Задачи")],
+        [KeyboardButton("ℹ️ Помощь"), KeyboardButton("⚙️ Настройки")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /help"""
+    help_text = (
+        "🆘 **Помощь по TVK Assistant Bot**\n\n"
+        "📋 **Running List (ГОТОВО!):**\n"
+        "• Создавайте повторяющиеся задачи\n"
+        "• Приоритеты: 🟦 Низкий, 🟨 Средний, 🟥 Высокий, ⚡ Срочный\n"
+        "• Назначайте дни выполнения\n\n"
+        "🎯 **Как использовать Running List:**\n"
+        "1. Нажмите '📋 Running List'\n"
+        "2. '➕ Добавить задачу' для создания\n"
+        "3. Выберите приоритет и дни недели\n"
+        "4. Отслеживайте выполнение\n\n"
+        "🔧 **Статус функций:**\n"
+        "• 📋 Running List - ✅ РАБОТАЕТ\n"
+        "• 📊 Табель - ⏳ В РАЗРАБОТКЕ\n"
+        "• 🏗️ Объекты - ⏳ В РАЗРАБОТКЕ\n"
+        "• 📝 Задачи - ⏳ В РАЗРАБОТКЕ\n"
+        "• ⚙️ Настройки - ⏳ В РАЗРАБОТКЕ"
+    )
+
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+
+async def running_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /running_list"""
+    await running_handlers.show_running_list(update, context)
+
+
+async def timesheet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик табеля"""
+    await update.message.reply_text(
+        "📊 **Табель учета рабочего времени**\n\n"
+        "⏳ Эта функция находится в разработке.\n"
+        "Скоро здесь будет учет рабочего времени!\n\n"
+        "📋 А пока попробуйте новую систему **Running List** - она уже работает! 🚀"
+    )
+
+
+async def objects_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик строительных объектов"""
+    await update.message.reply_text(
+        "🏗️ **Строительные объекты**\n\n"
+        "⏳ Эта функция находится в разработке.\n"
+        "Скоро здесь будет управление строительными объектами!\n\n"
+        "📋 А пока попробуйте новую систему **Running List** - она уже работает! 🚀"
+    )
+
+
+async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик общих задач"""
+    await update.message.reply_text(
+        "📝 **Общие задачи**\n\n"
+        "⏳ Эта функция находится в разработке.\n"
+        "Скоро здесь будет управление общими задачами!\n\n"
+        "📋 А пока попробуйте новую систему **Running List** - она уже работает! 🚀"
+    )
+
+
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик настроек"""
+    await update.message.reply_text(
+        "⚙️ **Настройки**\n\n"
+        "⏳ Эта функция находится в разработке.\n"
+        "Скоро здесь будут настройки бота!\n\n"
+        "📋 А пока попробуйте новую систему **Running List** - она уже работает! 🚀"
+    )
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик текстовых сообщений"""
+    text = update.message.text
+
+    if text == "📋 Running List":
+        await running_handlers.show_running_list(update, context)
+    elif text == "📊 Табель":
+        await timesheet_command(update, context)
+    elif text == "🏗️ Объекты":
+        await objects_command(update, context)
+    elif text == "📝 Задачи":
+        await tasks_command(update, context)
+    elif text == "ℹ️ Помощь":
+        await help_command(update, context)
+    elif text == "⚙️ Настройки":
+        await settings_command(update, context)
+    elif context.user_data.get('adding_task'):
+        await running_handlers.handle_task_text(update, context)
+    else:
+        await update.message.reply_text(
+            "🤔 Не понял ваше сообщение.\n\n"
+            "Используйте кнопки меню или команды:\n"
+            "/start - Основное меню\n"
+            "/help - Помощь\n"
+            "/running_list - Running List"
+        )
+
+
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик callback запросов от inline кнопок"""
+    query = update.callback_query
+    data = query.data
+
+    try:
+        if data == "add_task" or data == "add_first_task":
+            await running_handlers.add_task_start(update, context)
+        elif data.startswith("priority_"):
+            await running_handlers.handle_priority(update, context)
+        elif data.startswith("day_"):
+            await running_handlers.toggle_day(update, context)
+        elif data == "save_task":
+            await running_handlers.save_task(update, context)
+        elif data == "refresh_list":
+            await running_handlers.refresh_list(update, context)
+        else:
+            await query.answer("Неизвестная команда")
+    except Exception as e:
+        logger.error(f"❌ Ошибка в callback {data}: {e}")
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        await query.answer("Произошла ошибка, попробуйте еще раз")
+
+
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 
 def debug_database():
     """Проверяет подключение к базе и существующие таблицы"""
@@ -461,6 +608,48 @@ def debug_database():
         logger.error(f"❌ Ошибка при проверке БД: {e}")
 
 
+def check_and_run_migrations():
+    """Проверяет и применяет необходимые миграции"""
+    try:
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            logger.warning("❌ DATABASE_URL не установлен, пропускаем миграции")
+            return
+
+        engine = create_engine(database_url)
+
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'running_tasks'
+                );
+            """))
+            table_exists = result.scalar()
+
+            if not table_exists:
+                logger.info("🔄 Создаем таблицу running_tasks...")
+                conn.execute(text("""
+                    CREATE TABLE running_tasks (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        task_text TEXT NOT NULL,
+                        priority VARCHAR(20) DEFAULT 'medium',
+                        days_of_week TEXT,
+                        status_history TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """))
+                conn.commit()
+                logger.info("✅ Таблица running_tasks создана")
+            else:
+                logger.info("✅ Таблица running_tasks уже существует")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка при применении миграций: {e}")
+
+
+# ОСНОВНАЯ ФУНКЦИЯ
 def main():
     """Основная функция запуска бота"""
     try:
@@ -478,10 +667,13 @@ def main():
         # Отладочная информация о БД
         debug_database()
 
+        # Проверяем миграции
+        check_and_run_migrations()
+
         # Создаем приложение
         application = Application.builder().token(token).build()
 
-        # Добавляем обработчики
+        # Добавляем обработчики - теперь все функции определены
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("running_list", running_list_command))
