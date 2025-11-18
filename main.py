@@ -16,13 +16,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Временно создадим простую версию StorageService здесь
 class SimpleStorageService:
+    """Упрощенный сервис для хранения данных"""
+
     def __init__(self, session):
         self.session = session
 
     def add_running_task(self, user_id, task_text, priority="medium"):
-        # Временная реализация
         logger.info(f"Добавление задачи: {task_text} для пользователя {user_id}")
         return {"id": 1, "user_id": user_id, "task_text": task_text, "priority": priority}
 
@@ -34,9 +34,14 @@ def check_and_run_migrations():
     """Проверяет и применяет необходимые миграции"""
     try:
         database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            logger.warning("DATABASE_URL не установлен, пропускаем миграции")
+            return
+
         engine = create_engine(database_url)
 
         with engine.connect() as conn:
+            # Проверяем существование таблицы
             result = conn.execute(text("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables 
@@ -60,20 +65,24 @@ def check_and_run_migrations():
                 """))
                 conn.commit()
                 logger.info("✅ Таблица running_tasks создана")
+            else:
+                logger.info("✅ Таблица running_tasks уже существует")
 
     except Exception as e:
-        logger.error(f"Ошибка миграции: {e}")
-        raise
+        logger.error(f"Ошибка при применении миграций: {e}")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user = update.effective_user
+    logger.info(f"Пользователь {user.first_name} запустил бота")
 
     welcome_text = (
         f"Привет, {user.first_name}! 👋\n\n"
         "Я TVK Assistant Bot - твой помощник в организации задач.\n\n"
-        "📋 Используй кнопки ниже для работы с running list!"
+        "📋 **Running List система в разработке**\n"
+        "Скоро здесь будет управление повторяющимися задачами!\n\n"
+        "Используй кнопки ниже для навигации."
     )
 
     keyboard = [
@@ -87,8 +96,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
-    help_text = "Функция running list в разработке. Скоро будет доступна!"
-    await update.message.reply_text(help_text)
+    help_text = (
+        "🆘 **Помощь по TVK Assistant Bot**\n\n"
+        "📋 **Running List (в разработке):**\n"
+        "• Система повторяющихся задач\n"
+        "• Приоритеты: 🟦 Низкий, 🟨 Средний, 🟥 Высокий, ⚡ Срочный\n"
+        "• Статусы: ✅ Выполнено, 🔳 Частично, ❌ Отменено, ▶️ Перенесено\n\n"
+        "⏳ **Скоро будет доступно!**"
+    )
+
+    await update.message.reply_text(help_text, parse_mode='Markdown')
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -96,7 +113,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     if text == "📋 Running List":
-        await update.message.reply_text("📋 Running list будет доступен в следующем обновлении")
+        await update.message.reply_text("📋 Running list находится в разработке. Скоро будет доступен!")
     elif text == "➕ Добавить задачу":
         await update.message.reply_text("➕ Добавление задач будет доступно в следующем обновлении")
     elif text == "ℹ️ Помощь":
@@ -110,11 +127,16 @@ def main():
     try:
         logger.info("Запуск TVK Assistant Bot...")
 
-        # Проверяем миграции
+        # Проверяем переменные окружения
+        token = os.getenv('TELEGRAM_BOT_TOKEN')
+        if not token:
+            logger.error("TELEGRAM_BOT_TOKEN не установлен!")
+            return
+
+        # Проверяем и применяем миграции
         check_and_run_migrations()
 
         # Создаем приложение
-        token = os.getenv('TELEGRAM_BOT_TOKEN')
         application = Application.builder().token(token).build()
 
         # Добавляем обработчики
@@ -123,11 +145,12 @@ def main():
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
         # Запускаем бота
-        logger.info("Бот запущен")
+        logger.info("Бот запущен и готов к работе")
         application.run_polling()
 
     except Exception as e:
-        logger.critical(f"Ошибка запуска: {e}")
+        logger.critical(f"Критическая ошибка при запуске бота: {e}")
+        raise
 
 
 if __name__ == '__main__':

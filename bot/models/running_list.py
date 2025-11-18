@@ -9,8 +9,8 @@ class RunningTask:
         self.id = id
         self.user_id = user_id
         self.task_text = task_text
-        self.priority = priority  # "low", "medium", "high", "urgent"
-        self.days_of_week = days_of_week or [False] * 7  # [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+        self.priority = priority
+        self.days_of_week = days_of_week or [False] * 7
         self.status_history = status_history or []
         self.created_at = created_at or datetime.now()
 
@@ -46,8 +46,8 @@ class RunningTaskDB:
     user_id = Column(Integer, nullable=False)
     task_text = Column(String, nullable=False)
     priority = Column(String, default='medium')
-    days_of_week = Column(String)  # JSON array as string
-    status_history = Column(String)  # JSON array as string
+    days_of_week = Column(String)
+    status_history = Column(String)
     created_at = Column(DateTime, default=datetime.now)
 
     def to_running_task(self):
