@@ -1,249 +1,147 @@
 import json
 import os
-from datetime import datetime
-from typing import Dict, List
+from datetime import date, datetime
+from typing import List, Optional, Dict, Any
+from pathlib import Path
+
+from ..models.timesheet import Timesheet, TimesheetEntry, WorkStatus
+from ..models.employee import Employee
+from ..models.salary_report import SalaryReport
 
 
-class JSONStorageService:
-    def __init__(self, storage_dir: str = "data"):
-        self.storage_dir = storage_dir
-        if not os.path.exists(storage_dir):
-            os.makedirs(storage_dir)
+class StorageService:
+    def __init__(self, data_dir: str = "data"):
+        self.data_dir = Path(data_dir)
+        self.data_dir.mkdir(exist_ok=True)
 
-    def save_user_data(self, user_data):
-        """Сохраняет данные пользователя в JSON файл"""
-        try:
-            filename = os.path.join(self.storage_dir, f"user_{user_data.chat_id}.json")
+        # Папки для разных типов данных
+        self.employees_file = self.data_dir / "employees.json"
+        self.timesheets_dir = self.data_dir / "timesheets"
+        self.reports_dir = self.data_dir / "salary_reports"
 
-            # Преобразуем данные в JSON-совместимый формат
-            data = {
-                'chat_id': user_data.chat_id,
-                'state': user_data.state,
-                'expenses': [
-                    {
-                        'date': exp.date.isoformat(),
-                        'category': exp.category,
-                        'amount': exp.amount,
-                        'description': exp.description,
-                        'type': exp.type
-                    } for exp in user_data.expenses
-                ],
-                'timesheet': {
-                    'employees': [
-                        {
-                            'id': emp.id,
-                            'name': emp.name,
-                            'daily_salary': emp.daily_salary,
-                            'created_date': emp.created_date.isoformat()
-                        } for emp in user_data.timesheet.employees.values()
-                    ],
-                    'attendance_records': [
-                        {
-                            'employee_id': rec.employee_id,
-                            'work_date': rec.work_date.isoformat(),
-                            'is_present': rec.is_present,
-                            'is_locked': rec.is_locked
-                        } for rec in user_data.timesheet.attendance_records
-                    ]
-                },
-                'construction_manager': {
-                    'objects': [
-                        {
-                            'id': obj.id,
-                            'name': obj.name,
-                            'address': obj.address,
-                            'created_date': obj.created_date.isoformat(),
-                            'current_stage': obj.current_stage.name,
-                            'responsible_persons': [
-                                {
-                                    'name': person.name,
-                                    'position': person.position,
-                                    'phone': person.phone,
-                                    'email': person.email
-                                } for person in obj.responsible_persons
-                            ],
-                            'comments': {
-                                stage.name: comments for stage, comments in obj.comments.items()
-                            },
-                            'is_completed': obj.is_completed,
-                            'completion_date': obj.completion_date.isoformat() if obj.completion_date else None
-                        } for obj in user_data.construction_manager.objects.values()
-                    ]
-                },
-                # ДОБАВЛЯЕМ RUNNING LIST ДАННЫЕ
-                'running_list': {
-                    'tasks': [
-                        {
-                            'id': task.id,
-                            'description': task.description,
-                            'priority': task.priority.name,
-                            'created_date': task.created_date.isoformat(),
-                            'is_completed': task.is_completed,
-                            'completed_date': task.completed_date.isoformat() if task.completed_date else None,
-                            'due_date': task.due_date.isoformat() if task.due_date else None
-                        } for task in user_data.running_list.tasks
-                    ]
-                },
-                'last_updated': datetime.now().isoformat()
-            }
+        self.timesheets_dir.mkdir(exist_ok=True)
+        self.reports_dir.mkdir(exist_ok=True)
 
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+    # Методы для сотрудников
+    def save_employee(self, employee: Employee) -> None:
+        employees = self._load_employees()
+        employees[employee.id] = employee.__dict__
+        self._save_employees(employees)
 
-            print(f"✅ Данные пользователя {user_data.chat_id} сохранены")
+    def get_employee(self, employee_id: str) -> Optional[Employee]:
+        employees = self._load_employees()
+        emp_data = employees.get(employee_id)
+        if emp_data:
+            # Конвертируем строку даты обратно в объект date
+            if 'created_at' in emp_data and isinstance(emp_data['created_at'], str):
+                emp_data['created_at'] = date.fromisoformat(emp_data['created_at'])
+            return Employee(**emp_data)
+        return None
 
-        except Exception as e:
-            print(f"❌ Ошибка сохранения данных пользователя {user_data.chat_id}: {e}")
+    def get_all_employees(self) -> List[Employee]:
+        employees = self._load_employees()
+        result = []
+        for emp_data in employees.values():
+            if 'created_at' in emp_data and isinstance(emp_data['created_at'], str):
+                emp_data['created_at'] = date.fromisoformat(emp_data['created_at'])
+            result.append(Employee(**emp_data))
+        return result
 
-    def load_user_data(self, chat_id: int):
-        """Загружает данные пользователя из JSON файла"""
-        filename = os.path.join(self.storage_dir, f"user_{chat_id}.json")
+    def _load_employees(self) -> Dict[str, Any]:
+        if not self.employees_file.exists():
+            return {}
+        with open(self.employees_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
 
-        if not os.path.exists(filename):
-            print(f"Файл данных для пользователя {chat_id} не найден, создаем новый")
-            # Импортируем здесь, чтобы избежать циклических импортов
-            from ..models.user_data import UserData
-            return UserData(chat_id)
+    def _save_employees(self, employees: Dict[str, Any]) -> None:
+        with open(self.employees_file, 'w', encoding='utf-8') as f:
+            json.dump(employees, f, ensure_ascii=False, indent=2, default=str)
 
-        try:
-            with open(filename, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+    # Методы для табелей
+    def save_timesheet(self, timesheet: Timesheet) -> None:
+        filename = self.timesheets_dir / f"{timesheet.employee_id}_{timesheet.year}_{timesheet.month:02d}.json"
+        data = {
+            'employee_id': timesheet.employee_id,
+            'month': timesheet.month,
+            'year': timesheet.year,
+            'entries': [
+                {
+                    'employee_id': entry.employee_id,
+                    'date': entry.date.isoformat(),
+                    'status': entry.status.value,
+                    'hours_worked': entry.hours_worked,
+                    'created_at': entry.created_at.isoformat()
+                }
+                for entry in timesheet.entries
+            ]
+        }
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
-            # Импортируем здесь, чтобы избежать циклических импортов
-            from ..models.user_data import UserData, Expense
-            from ..models.timesheet import Employee, AttendanceRecord, Timesheet
-            from ..models.construction import ConstructionStage, ResponsiblePerson, ConstructionObject, \
-                ConstructionManager
-            from ..models.running_list import RunningTask, TaskPriority, RunningList
+    def get_timesheet(self, employee_id: str, month: int, year: int) -> Optional[Timesheet]:
+        filename = self.timesheets_dir / f"{employee_id}_{year}_{month:02d}.json"
+        if not filename.exists():
+            return None
 
-            user_data = UserData(chat_id)
-            user_data.state = data.get('state', 'main_menu')
+        with open(filename, 'r', encoding='utf-8') as f:
+            data = json.load(f)
 
-            # Восстанавливаем расходы
-            for exp_data in data.get('expenses', []):
-                expense = Expense(
-                    category=exp_data['category'],
-                    amount=exp_data['amount'],
-                    description=exp_data['description'],
-                    expense_type=exp_data['type'],
-                    date=datetime.fromisoformat(exp_data['date'])
-                )
-                user_data.expenses.append(expense)
+        entries = []
+        for entry_data in data['entries']:
+            entries.append(TimesheetEntry(
+                employee_id=entry_data['employee_id'],
+                date=date.fromisoformat(entry_data['date']),
+                status=WorkStatus(entry_data['status']),
+                hours_worked=entry_data['hours_worked'],
+                created_at=datetime.fromisoformat(entry_data['created_at'])
+            ))
 
-            # Восстанавливаем табель
-            timesheet = user_data.timesheet
+        return Timesheet(
+            employee_id=data['employee_id'],
+            month=data['month'],
+            year=data['year'],
+            entries=entries
+        )
 
-            # Восстанавливаем сотрудников
-            for emp_data in data.get('timesheet', {}).get('employees', []):
-                employee = Employee(
-                    name=emp_data['name'],
-                    daily_salary=emp_data['daily_salary'],
-                    employee_id=emp_data['id']
-                )
-                employee.created_date = datetime.fromisoformat(emp_data['created_date'])
-                timesheet.employees[employee.id] = employee
+    def get_or_create_timesheet(self, employee_id: str, for_date: date) -> Timesheet:
+        """Получает или создает табель для сотрудника на указанный месяц"""
+        timesheet = self.get_timesheet(employee_id, for_date.month, for_date.year)
+        if timesheet is None:
+            timesheet = Timesheet(
+                employee_id=employee_id,
+                month=for_date.month,
+                year=for_date.year
+            )
+        return timesheet
 
-            # Восстанавливаем записи посещаемости
-            for rec_data in data.get('timesheet', {}).get('attendance_records', []):
-                record = AttendanceRecord(
-                    employee_id=rec_data['employee_id'],
-                    work_date=datetime.fromisoformat(rec_data['work_date']).date(),
-                    is_present=rec_data['is_present']
-                )
-                record.is_locked = rec_data['is_locked']
-                timesheet.attendance_records.append(record)
+    # Методы для отчетов по зарплате
+    def save_salary_report(self, report: SalaryReport) -> None:
+        filename = self.reports_dir / f"report_{report.period_start}_{report.period_end}.json"
+        data = {
+            'period_start': report.period_start.isoformat(),
+            'period_end': report.period_end.isoformat(),
+            'generated_at': report.generated_at.isoformat(),
+            'entries': report.entries
+        }
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
-            # Восстанавливаем строительные объекты
-            construction_manager = user_data.construction_manager
+    def get_salary_report(self, period_start: date, period_end: date) -> Optional[SalaryReport]:
+        filename = self.reports_dir / f"report_{period_start}_{period_end}.json"
+        if not filename.exists():
+            return None
 
-            for obj_data in data.get('construction_manager', {}).get('objects', []):
-                obj = ConstructionObject(
-                    name=obj_data['name'],
-                    address=obj_data['address'],
-                    object_id=obj_data['id']
-                )
-                obj.created_date = datetime.fromisoformat(obj_data['created_date'])
-                obj.current_stage = ConstructionStage[obj_data['current_stage']]
-                obj.is_completed = obj_data['is_completed']
+        with open(filename, 'r', encoding='utf-8') as f:
+            data = json.load(f)
 
-                if obj_data['completion_date']:
-                    obj.completion_date = datetime.fromisoformat(obj_data['completion_date'])
+        report = SalaryReport(
+            period_start=date.fromisoformat(data['period_start']),
+            period_end=date.fromisoformat(data['period_end']),
+            generated_at=date.fromisoformat(data['generated_at']),
+            entries=data['entries']
+        )
+        return report
 
-                # Восстанавливаем ответственных лиц
-                for person_data in obj_data.get('responsible_persons', []):
-                    person = ResponsiblePerson(
-                        name=person_data['name'],
-                        position=person_data['position'],
-                        phone=person_data['phone'],
-                        email=person_data.get('email', '')
-                    )
-                    obj.responsible_persons.append(person)
-
-                # Восстанавливаем комментарии
-                for stage_name, comments in obj_data.get('comments', {}).items():
-                    stage = ConstructionStage[stage_name]
-                    obj.comments[stage] = comments
-
-                construction_manager.objects[obj.id] = obj
-
-            # ВОССТАНАВЛИВАЕМ RUNNING LIST ДАННЫЕ
-            running_list = user_data.running_list
-
-            for task_data in data.get('running_list', {}).get('tasks', []):
-                try:
-                    task = RunningTask(
-                        description=task_data['description'],
-                        priority=TaskPriority[task_data['priority']],
-                        task_id=task_data['id']
-                    )
-                    task.created_date = datetime.fromisoformat(task_data['created_date'])
-                    task.is_completed = task_data['is_completed']
-
-                    if task_data['completed_date']:
-                        task.completed_date = datetime.fromisoformat(task_data['completed_date'])
-
-                    if task_data['due_date']:
-                        task.due_date = datetime.fromisoformat(task_data['due_date'])
-
-                    running_list.tasks.append(task)
-
-                except KeyError as e:
-                    print(f"Ошибка загрузки задачи running list: {e}")
-                    continue
-
-            print(f"✅ Данные пользователя {chat_id} загружены")
-            return user_data
-
-        except Exception as e:
-            print(f"❌ Ошибка загрузки данных для пользователя {chat_id}: {e}")
-            from ..models.user_data import UserData
-            return UserData(chat_id)
-
-    def save_all_data(self, users_data: Dict[int, object]):
-        """Сохраняет данные всех пользователей"""
-        print(f"💾 Сохранение данных {len(users_data)} пользователей...")
-        for user_data in users_data.values():
-            self.save_user_data(user_data)
-        print("✅ Все данные сохранены!")
-
-    def load_all_data(self) -> Dict[int, object]:
-        """Загружает данные всех пользователей"""
-        users_data = {}
-
-        if not os.path.exists(self.storage_dir):
-            print("📁 Папка данных не существует, создаем новую")
-            return users_data
-
-        print("🔄 Загрузка данных пользователей...")
-        for filename in os.listdir(self.storage_dir):
-            if filename.startswith("user_") and filename.endswith(".json"):
-                try:
-                    chat_id = int(filename[5:-5])  # извлекаем chat_id из "user_12345.json"
-                    user_data = self.load_user_data(chat_id)
-                    users_data[chat_id] = user_data
-                except ValueError as e:
-                    print(f"✗ Ошибка обработки файла {filename}: {e}")
-                    continue
-
-        print(f"✅ Загружены данные {len(users_data)} пользователей")
-        return users_data
+    def is_report_exists(self, period_start: date, period_end: date) -> bool:
+        filename = self.reports_dir / f"report_{period_start}_{period_end}.json"
+        return filename.exists()
