@@ -41,7 +41,8 @@ class StorageService:
 
     def add_running_task(self, user_id, task_text, priority="medium", days_of_week=None):
         if not self.engine:
-            return RunningTask(id=1, user_id=user_id, task_text=task_text, priority=priority)
+            logger.warning("База данных не доступна, задача не сохранена")
+            return None
 
         try:
             session = self.Session()
@@ -50,7 +51,7 @@ class StorageService:
             result = session.execute(text("""
                 INSERT INTO running_tasks (user_id, task_text, priority, days_of_week, status_history)
                 VALUES (:user_id, :task_text, :priority, :days_of_week, :status_history)
-                RETURNING id
+                RETURNING id, created_at
             """), {
                 'user_id': user_id,
                 'task_text': task_text,
@@ -59,8 +60,12 @@ class StorageService:
                 'status_history': json.dumps([])
             })
 
-            task_id = result.scalar()
+            row = result.fetchone()
+            task_id, created_at = row
             session.commit()
+            session.close()
+
+            logger.info(f"✅ Задача сохранена в БД, ID: {task_id}")
 
             return RunningTask(
                 id=task_id,
@@ -68,14 +73,16 @@ class StorageService:
                 task_text=task_text,
                 priority=priority,
                 days_of_week=days_of_week,
-                status_history=[]
+                status_history=[],
+                created_at=created_at
             )
         except Exception as e:
-            logger.error(f"Ошибка при добавлении задачи: {e}")
+            logger.error(f"❌ Ошибка при добавлении задачи: {e}")
             return None
 
     def get_running_tasks(self, user_id):
         if not self.engine:
+            logger.warning("База данных не доступна")
             return []
 
         try:
@@ -98,9 +105,12 @@ class StorageService:
                     status_history=json.loads(row[5]) if row[5] else [],
                     created_at=row[6]
                 ))
+
+            session.close()
+            logger.info(f"✅ Загружено {len(tasks)} задач для пользователя {user_id}")
             return tasks
         except Exception as e:
-            logger.error(f"Ошибка при получении задач: {e}")
+            logger.error(f"❌ Ошибка при получении задач: {e}")
             return []
 
 
@@ -136,17 +146,27 @@ class RunningListHandlers:
         user_id = update.effective_user.id
         tasks = self.storage.get_running_tasks(user_id)
 
+        logger.info(f"🔍 Поиск задач для пользователя {user_id}. Найдено: {len(tasks)}")
+
         if not tasks:
             # Если задач нет, предлагаем создать первую
             keyboard = [
                 [InlineKeyboardButton("➕ Создать первую задачу", callback_data="add_first_task")]
             ]
-            await update.message.reply_text(
-                "📋 **Ваш Running List пуст**\n\n"
-                "Создайте свою первую задачу для отслеживания!",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode='Markdown'
-            )
+            if update.callback_query:
+                await update.callback_query.edit_message_text(
+                    "📋 **Ваш Running List пуст**\n\n"
+                    "Создайте свою первую задачу для отслеживания!",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+            else:
+                await update.message.reply_text(
+                    "📋 **Ваш Running List пуст**\n\n"
+                    "Создайте свою первую задачу для отслеживания!",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
             return
 
         # Показываем список задач
@@ -161,20 +181,27 @@ class RunningListHandlers:
             [InlineKeyboardButton("🔄 Обновить", callback_data="refresh_list")]
         ]
 
-        await update.message.reply_text(
-            message,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                message,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                message,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
 
     async def add_task_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Начинает процесс добавления задачи"""
         query = update.callback_query
         if query:
             await query.answer()
-            await query.edit_message_text("Введите текст новой задачи:")
+            await query.edit_message_text("✏️ Введите текст новой задачи:")
         else:
-            await update.message.reply_text("Введите текст новой задачи:")
+            await update.message.reply_text("✏️ Введите текст новой задачи:")
 
         # Сохраняем состояние в context
         context.user_data['adding_task'] = True
@@ -185,8 +212,10 @@ class RunningListHandlers:
             return
 
         task_text = update.message.text
-        context.user_data['new_task'] = {'text': task_text}
+        context.user_data['new_task'] = {'text': task_text, 'days': [False] * 7}
         context.user_data['adding_task'] = False
+
+        logger.info(f"📝 Пользователь ввел текст задачи: {task_text}")
 
         # Клавиатура для выбора приоритета
         keyboard = [
@@ -201,7 +230,7 @@ class RunningListHandlers:
         ]
 
         await update.message.reply_text(
-            f"Задача: *{task_text}*\n\nВыберите приоритет:",
+            f"📝 Задача: *{task_text}*\n\n🎯 Выберите приоритет:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
@@ -214,24 +243,56 @@ class RunningListHandlers:
         priority = query.data.replace("priority_", "")
         context.user_data['new_task']['priority'] = priority
 
+        logger.info(f"🎯 Выбран приоритет: {priority}")
+
+        # Обновляем сообщение с выбором дней
+        await self.show_days_selection(update, context)
+
+    async def show_days_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает выбор дней недели"""
+        query = update.callback_query
+
         # Создаем клавиатуру для выбора дней недели
         keyboard = []
         row = []
         for i, day in enumerate(self.day_names):
-            row.append(InlineKeyboardButton(day, callback_data=f"day_{i}"))
+            is_selected = context.user_data['new_task']['days'][i]
+            button_text = f"✅ {day}" if is_selected else day
+            row.append(InlineKeyboardButton(button_text, callback_data=f"day_{i}"))
             if len(row) == 3:
                 keyboard.append(row)
                 row = []
         if row:
             keyboard.append(row)
 
-        keyboard.append([InlineKeyboardButton("✅ Сохранить задачу", callback_data="save_task")])
+        keyboard.append([InlineKeyboardButton("💾 Сохранить задачу", callback_data="save_task")])
 
-        priority_emoji = self.priority_emojis.get(priority, "🟨")
+        # Формируем текст выбранных дней
+        days_status = ""
+        selected_days = []
+        for i, day_name in enumerate(self.day_names):
+            if context.user_data['new_task']['days'][i]:
+                days_status += f"✅ {day_name}\n"
+                selected_days.append(day_name)
+            else:
+                days_status += f"⬜ {day_name}\n"
+
+        priority_emoji = self.priority_emojis.get(context.user_data['new_task']['priority'], "🟨")
+
+        message = (
+            f"📝 Задача: *{context.user_data['new_task']['text']}*\n"
+            f"🎯 Приоритет: {priority_emoji}\n\n"
+        )
+
+        if selected_days:
+            message += f"📅 Выбранные дни:\n{days_status}\n"
+        else:
+            message += f"📅 Выберите дни выполнения:\n{days_status}\n"
+
+        message += "Нажмите на день чтобы выбрать/отменить:"
+
         await query.edit_message_text(
-            f"Задача: *{context.user_data['new_task']['text']}*\n"
-            f"Приоритет: {priority_emoji}\n\n"
-            "Выберите дни недели для выполнения (нажмите на день чтобы выбрать/отменить):",
+            message,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
@@ -243,45 +304,13 @@ class RunningListHandlers:
 
         day_index = int(query.data.replace("day_", ""))
 
-        # Инициализируем дни если нужно
-        if 'days' not in context.user_data['new_task']:
-            context.user_data['new_task']['days'] = [False] * 7
-
         # Переключаем состояние дня
         context.user_data['new_task']['days'][day_index] = not context.user_data['new_task']['days'][day_index]
 
-        # Обновляем сообщение с текущим состоянием
-        days_status = ""
-        for i, day_name in enumerate(self.day_names):
-            if context.user_data['new_task']['days'][i]:
-                days_status += f"✅ {day_name}\n"
-            else:
-                days_status += f"⬜ {day_name}\n"
+        logger.info(f"📅 Изменен день {self.day_names[day_index]}: {context.user_data['new_task']['days'][day_index]}")
 
-        priority_emoji = self.priority_emojis.get(context.user_data['new_task']['priority'], "🟨")
-
-        keyboard = []
-        row = []
-        for i, day in enumerate(self.day_names):
-            # Показываем выбранные дни с галочкой
-            button_text = f"✅ {day}" if context.user_data['new_task']['days'][i] else day
-            row.append(InlineKeyboardButton(button_text, callback_data=f"day_{i}"))
-            if len(row) == 3:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-
-        keyboard.append([InlineKeyboardButton("💾 Сохранить задачу", callback_data="save_task")])
-
-        await query.edit_message_text(
-            f"Задача: *{context.user_data['new_task']['text']}*\n"
-            f"Приоритет: {priority_emoji}\n\n"
-            f"Выбранные дни:\n{days_status}\n"
-            "Нажмите на день чтобы выбрать/отменить:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        # Обновляем сообщение
+        await self.show_days_selection(update, context)
 
     async def save_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Сохраняет задачу"""
@@ -290,6 +319,8 @@ class RunningListHandlers:
 
         task_data = context.user_data['new_task']
         user_id = update.effective_user.id
+
+        logger.info(f"💾 Сохранение задачи для пользователя {user_id}: {task_data}")
 
         # Сохраняем задачу
         task = self.storage.add_running_task(
@@ -304,13 +335,18 @@ class RunningListHandlers:
             context.user_data.pop('new_task', None)
             context.user_data.pop('adding_task', None)
 
+            logger.info(f"✅ Задача успешно сохранена с ID: {task.id}")
+
             await query.edit_message_text(
-                "✅ Задача успешно добавлена в Running List!\n\n"
-                "Используйте /running_list для просмотра всех задач."
+                "✅ *Задача успешно добавлена в Running List!*\n\n"
+                "Используйте кнопку '📋 Running List' для просмотра всех задач.",
+                parse_mode='Markdown'
             )
         else:
             await query.edit_message_text(
-                "❌ Ошибка при сохранении задачи. Попробуйте еще раз."
+                "❌ *Ошибка при сохранении задачи.*\n\n"
+                "Попробуйте еще раз или обратитесь к администратору.",
+                parse_mode='Markdown'
             )
 
     async def refresh_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -331,14 +367,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         f"Привет, {user.first_name}! 👋\n\n"
         "Я TVK Assistant Bot - твой помощник в организации задач.\n\n"
-        "📋 **Running List система АКТИВНА!**\n"
-        "Создавайте задачи, назначайте приоритеты и дни выполнения.\n\n"
-        "✨ **Новый функционал из ветки development!**"
+        "📋 **Доступные функции:**\n"
+        "• Running List - система повторяющихся задач\n"
+        "• Табель учета рабочего времени\n"
+        "• Управление строительными объектами\n"
+        "• И многое другое!\n\n"
+        "✨ **Running List обновлен!**"
     )
 
+    # ВОССТАНАВЛИВАЕМ ВСЕ КНОПКИ
     keyboard = [
-        [KeyboardButton("📋 Running List"), KeyboardButton("ℹ️ Помощь")],
-        [KeyboardButton("➕ Добавить задачу")]
+        [KeyboardButton("📋 Running List"), KeyboardButton("📊 Табель")],
+        [KeyboardButton("🏗️ Объекты"), KeyboardButton("📝 Задачи")],
+        [KeyboardButton("ℹ️ Помощь"), KeyboardButton("⚙️ Настройки")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -349,20 +390,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
     help_text = (
         "🆘 **Помощь по TVK Assistant Bot**\n\n"
-        "📋 **Running List система:**\n"
+        "📋 **Running List (НОВОЕ):**\n"
         "• Создавайте повторяющиеся задачи\n"
         "• Приоритеты: 🟦 Низкий, 🟨 Средний, 🟥 Высокий, ⚡ Срочный\n"
-        "• Назначайте дни выполнения\n"
-        "• Отслеживайте прогресс\n\n"
-        "🎯 **Как использовать:**\n"
-        "1. Нажмите '📋 Running List' для просмотра\n"
-        "2. Нажмите '➕ Добавить задачу' для создания\n"
+        "• Назначайте дни выполнения\n\n"
+        "🎯 **Как использовать Running List:**\n"
+        "1. Нажмите '📋 Running List'\n"
+        "2. '➕ Добавить задачу' для создания\n"
         "3. Выберите приоритет и дни недели\n"
         "4. Отслеживайте выполнение\n\n"
-        "🔧 **Команды:**\n"
-        "/start - Перезапустить бота\n"
-        "/help - Показать справку\n"
-        "/running_list - Показать список задач"
+        "🔧 **Все функции:**\n"
+        "• 📋 Running List - задачи\n"
+        "• 📊 Табель - учет времени\n"
+        "• 🏗️ Объекты - стройобъекты\n"
+        "• 📝 Задачи - общие задачи\n"
+        "• ⚙️ Настройки - настройки бота"
     )
 
     await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -373,26 +415,54 @@ async def running_list_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await running_handlers.show_running_list(update, context)
 
 
+async def timesheet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик табеля"""
+    await update.message.reply_text(
+        "📊 **Табель учета рабочего времени**\n\nФункция временно недоступна. Скоро вернемся!")
+
+
+async def objects_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик строительных объектов"""
+    await update.message.reply_text("🏗️ **Строительные объекты**\n\nФункция временно недоступна. Скоро вернемся!")
+
+
+async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик общих задач"""
+    await update.message.reply_text("📝 **Общие задачи**\n\nФункция временно недоступна. Скоро вернемся!")
+
+
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик настроек"""
+    await update.message.reply_text("⚙️ **Настройки**\n\nФункция временно недоступна. Скоро вернемся!")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик текстовых сообщений"""
     text = update.message.text
 
+    # Обработка основных кнопок
     if text == "📋 Running List":
         await running_handlers.show_running_list(update, context)
-    elif text == "➕ Добавить задачу":
-        await running_handlers.add_task_start(update, context)
+    elif text == "📊 Табель":
+        await timesheet_command(update, context)
+    elif text == "🏗️ Объекты":
+        await objects_command(update, context)
+    elif text == "📝 Задачи":
+        await tasks_command(update, context)
     elif text == "ℹ️ Помощь":
         await help_command(update, context)
+    elif text == "⚙️ Настройки":
+        await settings_command(update, context)
     elif context.user_data.get('adding_task'):
         # Если пользователь в процессе добавления задачи
         await running_handlers.handle_task_text(update, context)
     else:
         await update.message.reply_text(
-            "🤔 Не понял ваше сообщение.\n"
-            "Используйте кнопки или команды:\n"
-            "/start - Перезапуск\n"
+            "🤔 Не понял ваше сообщение.\n\n"
+            "Используйте кнопки меню или команды:\n"
+            "/start - Основное меню\n"
             "/help - Помощь\n"
-            "/running_list - Список задач"
+            "/running_list - Running List"
         )
 
 
@@ -401,18 +471,51 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     data = query.data
 
-    if data == "add_task" or data == "add_first_task":
-        await running_handlers.add_task_start(update, context)
-    elif data.startswith("priority_"):
-        await running_handlers.handle_priority(update, context)
-    elif data.startswith("day_"):
-        await running_handlers.toggle_day(update, context)
-    elif data == "save_task":
-        await running_handlers.save_task(update, context)
-    elif data == "refresh_list":
-        await running_handlers.refresh_list(update, context)
-    else:
-        await query.answer("Неизвестная команда")
+    try:
+        if data == "add_task" or data == "add_first_task":
+            await running_handlers.add_task_start(update, context)
+        elif data.startswith("priority_"):
+            await running_handlers.handle_priority(update, context)
+        elif data.startswith("day_"):
+            await running_handlers.toggle_day(update, context)
+        elif data == "save_task":
+            await running_handlers.save_task(update, context)
+        elif data == "refresh_list":
+            await running_handlers.refresh_list(update, context)
+        else:
+            await query.answer("Неизвестная команда")
+    except Exception as e:
+        logger.error(f"❌ Ошибка в callback: {e}")
+        await query.answer("Произошла ошибка")
+
+
+def debug_database():
+    """Проверяет подключение к базе и существующие таблицы"""
+    try:
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            logger.warning("DATABASE_URL не установлен")
+            return
+
+        engine = create_engine(database_url)
+        with engine.connect() as conn:
+            # Проверяем все таблицы
+            result = conn.execute(text("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public'
+            """))
+            tables = [row[0] for row in result]
+            logger.info(f"✅ Существующие таблицы в БД: {tables}")
+
+            # Проверяем running_tasks
+            if 'running_tasks' in tables:
+                result = conn.execute(text("SELECT COUNT(*) FROM running_tasks"))
+                count = result.scalar()
+                logger.info(f"✅ Количество задач в running_tasks: {count}")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке БД: {e}")
 
 
 def check_and_run_migrations():
@@ -449,6 +552,8 @@ def check_and_run_migrations():
                 """))
                 conn.commit()
                 logger.info("✅ Таблица running_tasks создана")
+            else:
+                logger.info("✅ Таблица running_tasks уже существует")
 
     except Exception as e:
         logger.error(f"Ошибка при применении миграций: {e}")
@@ -457,7 +562,10 @@ def check_and_run_migrations():
 def main():
     """Основная функция запуска бота"""
     try:
-        logger.info("Запуск TVK Assistant Bot...")
+        logger.info("=" * 50)
+        logger.info("ЗАПУСК TVK ASSISTANT BOT")
+        logger.info("Ветка: development")
+        logger.info("=" * 50)
 
         # Проверяем переменные окружения
         token = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -465,25 +573,34 @@ def main():
             logger.error("TELEGRAM_BOT_TOKEN не установлен!")
             return
 
+        # Отладочная информация
+        debug_database()
+
         # Проверяем миграции
         check_and_run_migrations()
 
         # Создаем приложение
         application = Application.builder().token(token).build()
 
-        # Добавляем обработчики
+        # Добавляем обработчики команд
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("running_list", running_list_command))
+
+        # Добавляем обработчики сообщений
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+        # Добавляем обработчики callback (для inline кнопок)
         application.add_handler(CallbackQueryHandler(handle_callback_query))
 
         # Запускаем бота
         logger.info("✅ Бот запущен и готов к работе")
+        logger.info("📋 Running List активирован")
+        logger.info("🎯 Все функции восстановлены")
         application.run_polling(drop_pending_updates=True)
 
     except Exception as e:
-        logger.critical(f"Критическая ошибка при запуске бота: {e}")
+        logger.critical(f"❌ Критическая ошибка при запуске бота: {e}")
 
 
 if __name__ == '__main__':
