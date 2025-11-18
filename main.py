@@ -566,7 +566,18 @@ class RunningListHandlers:
             context.user_data['new_task']['description'] = description
             context.user_data['adding_description'] = False
 
-            await self.show_priority_selection(update, context)
+            # Просто отправляем новое сообщение вместо edit_message_text
+            keyboard = [
+                [InlineKeyboardButton("🟦 Низкий", callback_data="priority_low")],
+                [InlineKeyboardButton("🟨 Средний", callback_data="priority_medium")],
+                [InlineKeyboardButton("🟥 Высокий", callback_data="priority_high")],
+                [InlineKeyboardButton("⚡ Срочный", callback_data="priority_urgent")]
+            ]
+
+            await update.message.reply_text(
+                "🎯 Выберите приоритет задачи:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
 
     async def show_priority_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает выбор приоритета"""
@@ -577,17 +588,19 @@ class RunningListHandlers:
             [InlineKeyboardButton("⚡ Срочный", callback_data="priority_urgent")]
         ]
 
-        if hasattr(update, 'callback_query'):
+        # Проверяем тип update и используем правильный метод
+        if hasattr(update, 'callback_query') and update.callback_query:
+            # Это callback запрос
             await update.callback_query.edit_message_text(
                 "🎯 Выберите приоритет задачи:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         else:
+            # Это обычное сообщение
             await update.message.reply_text(
                 "🎯 Выберите приоритет задачи:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-
     async def handle_priority(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обрабатывает выбор приоритета"""
         query = update.callback_query
