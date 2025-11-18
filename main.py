@@ -224,7 +224,11 @@ def main():
         # Запускаем бота
         logger.info("✅ Бот запущен и готов к работе")
         logger.info("⏳ Ожидаем сообщения...")
-        application.run_polling()
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            close_loop=False,
+            stop_signals=None  # Отключаем обработку сигналов остановки
+        )
 
     except Exception as e:
         logger.critical(f"❌ Критическая ошибка при запуске бота: {e}")
